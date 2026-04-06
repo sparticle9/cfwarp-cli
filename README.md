@@ -5,26 +5,28 @@ A CLI-first toolkit for building on top of Cloudflare WARP capabilities — free
 ## Goals
 
 - Bootstrap and manage Cloudflare WARP connectivity
-- Support both explicit proxy mode and full-egress/sidecar mode
+- Support both explicit proxy mode and full-egress/sidecar mode over time
 - Make endpoint selection / `优选 IP` experimentation easy
 - Keep the architecture transparent and composable
 - Avoid overclaiming what is implemented vs. what is wrapped
 
-## Initial scope
+## Current implementation direction
 
-This repository starts as a research and planning workspace.
+The first spec is intentionally narrow:
 
-Near-term focus:
-
-1. document the problem space
-2. choose a control-plane strategy for WARP registration/config
-3. define MVPs for proxy mode and sidecar mode
-4. evaluate implementation language and runtime tradeoffs
+- **Docker-first**
+- **Linux-first**
+- **explicit proxy mode first**
+- **minimal WireGuard-based backend first**
+- **future MASQUE path reserved, not yet implemented**
 
 ## Documents
 
 - `docs/background.md` — research notes and technical background gathered so far
+- `docs/specs/001-minimal-wireguard-proxy/requirements.md` — MVP requirements
+- `docs/specs/001-minimal-wireguard-proxy/design.md` — MVP design and Docker deployment
+- `docs/specs/001-minimal-wireguard-proxy/tasks.md` — incremental implementation plan
 
 ## Status
 
-Planning / discovery.
+Spec drafted for the first MVP: a minimalist Docker-friendly WireGuard-based explicit proxy.
