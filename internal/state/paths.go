@@ -47,6 +47,10 @@ func Resolve(configOverride, runtimeOverride string) Dirs {
 
 	if runtimeOverride != "" {
 		d.Runtime = runtimeOverride
+	} else if configOverride != "" {
+		// When --state-dir is given, co-locate runtime under the same root
+		// so callers don't need a separate --runtime-dir flag.
+		d.Runtime = filepath.Join(configOverride, "run")
 	} else if isContainer() || runtime.GOOS != "linux" {
 		d.Runtime = "/run/" + appName
 	} else {

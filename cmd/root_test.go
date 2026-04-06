@@ -78,12 +78,13 @@ func TestEndpointTestRequiresArgs(t *testing.T) {
 }
 
 func TestStatusNoArgs(t *testing.T) {
-	// status should not fail at command parsing level (platform check skipped there)
+	// status runs on all platforms (no platformCheck) and reports state.
 	out, err := executeRoot("status")
 	if err != nil {
 		t.Fatalf("status failed unexpectedly: %v", err)
 	}
-	if !strings.Contains(out, "not yet implemented") {
-		t.Errorf("expected stub message, got: %s", out)
+	// With no state dir configured, it should report account not configured.
+	if !strings.Contains(out, "configured") {
+		t.Errorf("expected configured/not configured in output, got: %s", out)
 	}
 }
