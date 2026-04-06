@@ -4,16 +4,22 @@ import "time"
 
 // AccountState holds the WARP device registration data persisted to account.json.
 type AccountState struct {
-	AccountID       string    `json:"account_id"`
-	Token           string    `json:"token"`
-	License         string    `json:"license,omitempty"`
-	ClientID        string    `json:"client_id"`
-	WARPPrivateKey  string    `json:"warp_private_key"`
-	WARPPeerPubKey  string    `json:"warp_peer_public_key"`
-	WARPIPV4        string    `json:"warp_ipv4"`
-	WARPIPV6        string    `json:"warp_ipv6"`
-	CreatedAt       time.Time `json:"created_at"`
-	Source          string    `json:"source"` // "register" | "import"
+	AccountID        string    `json:"account_id"`
+	Token            string    `json:"token"`
+	License          string    `json:"license,omitempty"`
+	ClientID         string    `json:"client_id"`
+	WARPPrivateKey   string    `json:"warp_private_key"`
+	WARPPeerPubKey   string    `json:"warp_peer_public_key"`
+	WARPIPV4         string    `json:"warp_ipv4"`
+	WARPIPV6         string    `json:"warp_ipv6"`
+	// WARPReserved holds the 3-byte reserved field from config.reserved,
+	// used as the WireGuard reserved bytes in the endpoint peer config.
+	WARPReserved     [3]int    `json:"warp_reserved"`
+	// WARPPeerEndpoint is the peer endpoint from the registration response
+	// (config.peers[0].endpoint.v4), used as the default WireGuard peer address.
+	WARPPeerEndpoint string    `json:"warp_peer_endpoint,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	Source           string    `json:"source"` // "register" | "import"
 }
 
 // Settings holds operator-supplied configuration persisted to settings.json.

@@ -53,8 +53,14 @@ type registrationResponse struct {
 	} `json:"account"`
 	Config struct {
 		ClientID string `json:"client_id"`
+		Reserved [3]int `json:"reserved"`
 		Peers    []struct {
 			PublicKey string `json:"public_key"`
+			Endpoint  struct {
+				V4   string `json:"v4"`
+				V6   string `json:"v6"`
+				Host string `json:"host"`
+			} `json:"endpoint"`
 		} `json:"peers"`
 		Interface struct {
 			Addresses struct {
@@ -67,13 +73,15 @@ type registrationResponse struct {
 
 // RegistrationResult is the parsed outcome of a successful registration call.
 type RegistrationResult struct {
-	AccountID      string
-	Token          string
-	License        string
-	ClientID       string
-	PeerPublicKey  string
-	IPv4           string
-	IPv6           string
+	AccountID    string
+	Token        string
+	License      string
+	ClientID     string
+	Reserved     [3]int
+	PeerPublicKey string
+	PeerEndpoint  string // "host:port" from config.peers[0].endpoint.v4, fallback to host
+	IPv4          string
+	IPv6          string
 }
 
 // Register calls the Cloudflare consumer registration API with the given public key.
@@ -120,12 +128,20 @@ func (c *Client) Register(ctx context.Context, publicKey string) (RegistrationRe
 		return RegistrationResult{}, err
 	}
 
+	peer := parsed.Config.Peers[0]
+	peerEndpoint := peer.Endpoint.V4
+	if peerEndpoint == "" {
+		peerEndpoint = peer.Endpoint.Host
+	}
+
 	return RegistrationResult{
 		AccountID:     parsed.ID,
 		Token:         parsed.Token,
 		License:       parsed.Account.License,
 		ClientID:      parsed.Config.ClientID,
-		PeerPublicKey: parsed.Config.Peers[0].PublicKey,
+		Reserved:      parsed.Config.Reserved,
+		PeerPublicKey: peer.PublicKey,
+		PeerEndpoint:  peerEndpoint,
 		IPv4:          parsed.Config.Interface.Addresses.V4,
 		IPv6:          parsed.Config.Interface.Addresses.V6,
 	}, nil

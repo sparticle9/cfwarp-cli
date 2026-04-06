@@ -50,16 +50,18 @@ Use --force to overwrite an existing registration.`,
 		}
 
 		acc := state.AccountState{
-			AccountID:      result.AccountID,
-			Token:          result.Token,
-			License:        result.License,
-			ClientID:       result.ClientID,
-			WARPPrivateKey: kp.PrivateKey,
-			WARPPeerPubKey: result.PeerPublicKey,
-			WARPIPV4:       result.IPv4,
-			WARPIPV6:       result.IPv6,
-			CreatedAt:      time.Now().UTC(),
-			Source:         "register",
+			AccountID:        result.AccountID,
+			Token:            result.Token,
+			License:          result.License,
+			ClientID:         result.ClientID,
+			WARPPrivateKey:   kp.PrivateKey,
+			WARPPeerPubKey:   result.PeerPublicKey,
+			WARPReserved:     result.Reserved,
+			WARPPeerEndpoint: result.PeerEndpoint,
+			WARPIPV4:         result.IPv4,
+			WARPIPV6:         result.IPv6,
+			CreatedAt:        time.Now().UTC(),
+			Source:           "register",
 		}
 		if err := state.SaveAccount(dirs, acc, registerForce); err != nil {
 			return fmt.Errorf("save account: %w", err)
