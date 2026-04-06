@@ -11,6 +11,7 @@ services:
       CFWARP_PROXY_MODE: "socks5"
       CFWARP_ENDPOINT_OVERRIDE: ""
       CFWARP_LOG_LEVEL: "info"
+      CFWARP_STATE_DIR: "/var/lib/cfwarp-cli"
     volumes:
       - cfwarp-data:/var/lib/cfwarp-cli
 
