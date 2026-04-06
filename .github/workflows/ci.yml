@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -timeout 60s -race
+
+  build:
+    name: Build binary (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w \
+              -X github.com/nexus/cfwarp-cli/internal/version.Version=${GITHUB_REF_NAME} \
+              -X github.com/nexus/cfwarp-cli/internal/version.Commit=${GITHUB_SHA::8} \
+              -X github.com/nexus/cfwarp-cli/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/cfwarp-cli-linux-amd64 .
+
+      - name: Build (linux/arm64)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -ldflags="-s -w \
+              -X github.com/nexus/cfwarp-cli/internal/version.Version=${GITHUB_REF_NAME} \
+              -X github.com/nexus/cfwarp-cli/internal/version.Commit=${GITHUB_SHA::8} \
+              -X github.com/nexus/cfwarp-cli/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/cfwarp-cli-linux-arm64 .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/

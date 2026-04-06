@@ -26,10 +26,12 @@
 
 - [ ] 5. Implement the backend abstraction and the first `singbox-wireguard` backend.
   - Define the backend interface described in the design.
+  - Use `sing-box` as the **first backend for explicit proxy mode** because it can run the WireGuard transport and proxy listener in userspace, which keeps the first Docker deployment lower-friction and typically avoids `NET_ADMIN` / `wg0` setup for the MVP path.
+  - Make the implementation boundary explicit so a later `kernel-wg-microsocks` backend can be added for a leaner but higher-privilege Linux path.
   - Add prerequisite checks for the `sing-box` binary.
   - Render backend config from registration state and settings.
   - Add golden tests for rendered config variants including no-auth, auth-enabled, and endpoint-override cases.
-  - Requirements: 3.1, 3.2, 3.3, 3.4, 5.1, 5.2, 8.1, 8.2, 8.3.
+  - Requirements: 3.1, 3.2, 3.3, 3.4, 5.1, 5.2, 6.1, 8.1, 8.2, 8.3.
 
 - [ ] 6. Implement process supervision for `up`, `down`, and runtime cleanup.
   - Launch `sing-box` with the rendered config, capture PID/log paths, and persist runtime metadata.

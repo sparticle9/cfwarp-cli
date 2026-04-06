@@ -1,0 +1,21 @@
+services:
+  cfwarp:
+    image: ghcr.io/${DOCKER_IMAGE:-owner/cfwarp-cli}:${TAG:-latest}
+    restart: unless-stopped
+    environment:
+      CFWARP_LISTEN_HOST: "0.0.0.0"
+      CFWARP_LISTEN_PORT: "1080"
+    volumes:
+      - cfwarp-data:/var/lib/cfwarp-cli
+
+  app:
+    image: curlimages/curl:latest
+    depends_on:
+      - cfwarp
+    environment:
+      ALL_PROXY: "socks5h://cfwarp:1080"
+      HTTPS_PROXY: "socks5h://cfwarp:1080"
+    command: ["sh", "-c", "sleep 5 && curl -fsSL https://www.cloudflare.com/cdn-cgi/trace"]
+
+volumes:
+  cfwarp-data:
