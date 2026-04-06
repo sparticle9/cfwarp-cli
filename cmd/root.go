@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var globalStateDir string
+
 var rootCmd = &cobra.Command{
 	Use:   "cfwarp-cli",
 	Short: "CLI toolkit for Cloudflare WARP-backed proxy",
@@ -16,14 +18,8 @@ WireGuard backend, exposing an explicit proxy (SOCKS5/HTTP) on Linux/Docker.`,
 	SilenceUsage: true,
 }
 
-// Execute is the entry point called from main.
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
-}
-
 func init() {
+	rootCmd.PersistentFlags().StringVar(&globalStateDir, "state-dir", "", "override config/state root directory")
 	rootCmd.AddCommand(
 		registerCmd,
 		importCmd,
@@ -34,6 +30,13 @@ func init() {
 		endpointCmd,
 		versionCmd,
 	)
+}
+
+// Execute is the entry point called from main.
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
 
 // platformCheck returns an error when the OS is unsupported.
