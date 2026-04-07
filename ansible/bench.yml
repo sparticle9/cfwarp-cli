@@ -216,7 +216,7 @@
         [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
           echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
-          echo "variant,run,bits_per_second" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
+          echo "variant,run,direction,bits_per_second,retransmits" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \

@@ -39,11 +39,11 @@ def load_csv(path: Path) -> list[dict[str, str]]:
 def to_float(value: str | None) -> float | None:
     if value is None:
         return None
-    value = value.strip()
-    if not value or value.upper() == "ERR":
+    s = value.strip()
+    if not s or s.upper() == "ERR":
         return None
     try:
-        return float(value)
+        return float(s)
     except ValueError:
         return None
 
@@ -51,7 +51,7 @@ def to_float(value: str | None) -> float | None:
 def parse_percent(value: str | None) -> float | None:
     if value is None:
         return None
-    return to_float(value.replace("%", "").strip())
+    return to_float(value.replace("%", ""))
 
 
 def parse_size_to_bytes(value: str | None) -> float | None:
@@ -60,9 +60,6 @@ def parse_size_to_bytes(value: str | None) -> float | None:
     s = value.strip()
     if not s or s.upper() == "ERR":
         return None
-    if s.endswith("B") and s[:-1].replace(".", "", 1).isdigit():
-        return float(s[:-1])
-
     units = {
         "B": 1,
         "kB": 1000,
@@ -76,8 +73,8 @@ def parse_size_to_bytes(value: str | None) -> float | None:
     }
     for unit in sorted(units, key=len, reverse=True):
         if s.endswith(unit):
-            num = to_float(s[: -len(unit)])
-            return None if num is None else num * units[unit]
+            n = to_float(s[:-len(unit)])
+            return None if n is None else n * units[unit]
     return to_float(s)
 
 
@@ -103,6 +100,12 @@ def stddev(values: list[float]) -> float:
     return statistics.pstdev(values) if len(values) > 1 else 0.0
 
 
+def safe_fmt(value: float | None, digits: int = 1, scale: float = 1.0) -> str:
+    if value is None or math.isnan(value):
+        return "n/a"
+    return f"{value / scale:.{digits}f}"
+
+
 def human_bytes(num: float | None) -> str:
     if num is None or math.isnan(num):
         return "n/a"
@@ -114,10 +117,12 @@ def human_bytes(num: float | None) -> str:
     return f"{value:.2f} TiB"
 
 
-def safe_fmt(value: float | None, digits: int = 1, scale: float = 1.0) -> str:
-    if value is None or math.isnan(value):
-        return "n/a"
-    return f"{value / scale:.{digits}f}"
+def common_variants(*sections: dict[str, Any]) -> list[str]:
+    keys = None
+    for section in sections:
+        present = set(section)
+        keys = present if keys is None else keys & present
+    return sorted(keys or [])
 
 
 def collect_latency(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
@@ -133,14 +138,29 @@ def collect_latency(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
 
 
 def collect_iperf3(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
-    grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {"success": [], "errors": 0})
+    grouped: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "upload": [],
+            "download": [],
+            "upload_retransmits": [],
+            "download_retransmits": [],
+            "errors": 0,
+            "runs": defaultdict(set),
+        }
+    )
     for row in rows:
         variant = row.get("variant", "unknown")
+        direction = (row.get("direction") or "").strip()
+        run = (row.get("run") or "").strip()
         bps = to_float(row.get("bits_per_second"))
-        if bps is None or bps <= 0:
+        retransmits = to_float(row.get("retransmits")) or 0.0
+        if direction not in ("upload", "download") or bps is None or bps <= 0:
             grouped[variant]["errors"] += 1
-        else:
-            grouped[variant]["success"].append(bps)
+            continue
+        grouped[variant][direction].append(bps)
+        grouped[variant][f"{direction}_retransmits"].append(retransmits)
+        if run:
+            grouped[variant]["runs"][run].add(direction)
     return grouped
 
 
@@ -162,28 +182,39 @@ def collect_http(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
 
 
 def collect_stats(rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, Any]]:
-    grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {
-        "samples": 0,
-        "cpu": [],
-        "mem_used": [],
-        "mem_limit": [],
-        "net_rx": [],
-        "net_tx": [],
-        "timestamps": [],
-    })
-
+    grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        lambda: {
+            "samples": [],
+            "cpu": [],
+            "mem_used": [],
+            "mem_limit": [],
+            "net_rx": [],
+            "net_tx": [],
+            "timestamps": [],
+        }
+    )
     for row in rows:
         variant = row.get("variant", "unknown")
         phase = row.get("phase", "unknown")
         entry = grouped[(variant, phase)]
-        entry["samples"] += 1
+        sample_ts = to_float(row.get("sample_ts"))
         cpu = parse_percent(row.get("cpu_pct"))
-        if cpu is not None:
-            entry["cpu"].append(cpu)
         mem_used = parse_size_to_bytes(row.get("mem_used"))
         mem_limit = parse_size_to_bytes(row.get("mem_limit"))
         net_rx = parse_size_to_bytes(row.get("net_rx"))
         net_tx = parse_size_to_bytes(row.get("net_tx"))
+        entry["samples"].append(
+            {
+                "sample_ts": sample_ts,
+                "cpu_pct": cpu,
+                "mem_used_bytes": mem_used,
+                "mem_limit_bytes": mem_limit,
+                "net_rx_bytes": net_rx,
+                "net_tx_bytes": net_tx,
+            }
+        )
+        if cpu is not None:
+            entry["cpu"].append(cpu)
         if mem_used is not None:
             entry["mem_used"].append(mem_used)
         if mem_limit is not None:
@@ -192,16 +223,14 @@ def collect_stats(rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str,
             entry["net_rx"].append(net_rx)
         if net_tx is not None:
             entry["net_tx"].append(net_tx)
-        ts = row.get("sample_ts")
-        if ts:
-            tsf = to_float(ts)
-            if tsf is not None:
-                entry["timestamps"].append(tsf)
+        if sample_ts is not None:
+            entry["timestamps"].append(sample_ts)
     return grouped
 
 
-def summarize_stats(grouped: dict[tuple[str, str], dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+def summarize_stats(grouped: dict[tuple[str, str], dict[str, Any]]) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[tuple[str, str], list[dict[str, Any]]]]:
     summary: dict[tuple[str, str], dict[str, Any]] = {}
+    raw: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for key, entry in grouped.items():
         cpu = entry["cpu"]
         mem = entry["mem_used"]
@@ -209,7 +238,7 @@ def summarize_stats(grouped: dict[tuple[str, str], dict[str, Any]]) -> dict[tupl
         rx = entry["net_rx"]
         tx = entry["net_tx"]
         summary[key] = {
-            "samples": entry["samples"],
+            "samples": len(entry["samples"]),
             "cpu_mean": mean(cpu) if cpu else float("nan"),
             "cpu_p95": percentile(cpu, 0.95) if cpu else float("nan"),
             "cpu_max": max(cpu) if cpu else float("nan"),
@@ -220,15 +249,8 @@ def summarize_stats(grouped: dict[tuple[str, str], dict[str, Any]]) -> dict[tupl
             "net_tx_delta_bytes": (tx[-1] - tx[0]) if len(tx) >= 2 else float("nan"),
             "mode": "timeseries" if entry["timestamps"] else "snapshot",
         }
-    return summary
-
-
-def common_variants(*sections: dict[str, Any]) -> list[str]:
-    keys = None
-    for section in sections:
-        present = set(section)
-        keys = present if keys is None else keys & present
-    return sorted(keys or [])
+        raw[key] = entry["samples"]
+    return summary, raw
 
 
 def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: dict[str, Any], http: dict[str, Any], stats: dict[tuple[str, str], Any]) -> str:
@@ -244,7 +266,7 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append(f"| Debian image | {args.debian_image} |")
     lines.append(f"| Container CPU | {args.container_cpus} vCPU |")
     lines.append(f"| Container memory | {args.container_memory} |")
-    lines.append(f"| iperf3 | {args.iperf3_parallel} streams × {args.iperf3_duration}s |")
+    lines.append(f"| iperf3 | bidirectional, {args.iperf3_parallel} streams × {args.iperf3_duration}s |")
     lines.append(f"| Latency probes | {args.latency_runs} pings per variant |")
     lines.append(f"| Throughput probes | {args.throughput_runs} runs per variant |")
     lines.append(f"| HTTP file size | {args.http_file_mb} MB |")
@@ -270,18 +292,24 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append("---")
     lines.append("")
 
-    lines.append("## Throughput — iperf3 raw WireGuard (Mbit/s)")
+    lines.append("## Throughput — iperf3 bidirectional raw WireGuard (Mbit/s)")
     lines.append("")
-    lines.append("| Variant | Median | p95 | Max | Mean | Success | Errors |")
-    lines.append("|---------|-------:|----:|----:|-----:|--------:|-------:|")
+    lines.append("| Variant | Upload Median | Download Median | Upload p95 | Download p95 | Upload Mean | Download Mean | Upload Retr Mean | Complete Runs | Errors |")
+    lines.append("|---------|--------------:|----------------:|-----------:|-------------:|------------:|--------------:|------------------:|--------------:|-------:|")
     for variant in sorted(iperf3):
-        vals = iperf3[variant]["success"]
+        up = iperf3[variant]["upload"]
+        down = iperf3[variant]["download"]
         errs = iperf3[variant]["errors"]
+        complete_runs = sum(1 for dirs in iperf3[variant]["runs"].values() if {"upload", "download"}.issubset(dirs))
         lines.append(
-            f"| {variant:<8} | {safe_fmt(percentile(vals, 0.50) if vals else float('nan'), scale=1e6)} | "
-            f"{safe_fmt(percentile(vals, 0.95) if vals else float('nan'), scale=1e6)} | "
-            f"{safe_fmt(max(vals) if vals else float('nan'), scale=1e6)} | "
-            f"{safe_fmt(mean(vals) if vals else float('nan'), scale=1e6)} | {len(vals)} | {errs} |"
+            f"| {variant:<8} | {safe_fmt(percentile(up, 0.50) if up else float('nan'), scale=1e6)} | "
+            f"{safe_fmt(percentile(down, 0.50) if down else float('nan'), scale=1e6)} | "
+            f"{safe_fmt(percentile(up, 0.95) if up else float('nan'), scale=1e6)} | "
+            f"{safe_fmt(percentile(down, 0.95) if down else float('nan'), scale=1e6)} | "
+            f"{safe_fmt(mean(up) if up else float('nan'), scale=1e6)} | "
+            f"{safe_fmt(mean(down) if down else float('nan'), scale=1e6)} | "
+            f"{safe_fmt(mean(iperf3[variant]['upload_retransmits']) if iperf3[variant]['upload_retransmits'] else float('nan'), digits=1)} | "
+            f"{complete_runs} | {errs} |"
         )
     lines.append("")
     lines.append("---")
@@ -305,7 +333,7 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append("---")
     lines.append("")
 
-    lines.append("## Resource Usage (docker stats)")
+    lines.append("## Resource Usage (docker stats over time)")
     lines.append("")
     lines.append("| Variant | Phase | Samples | CPU Mean % | CPU p95 % | CPU Max % | Mem Mean | Mem Peak | Net RX Δ | Net TX Δ |")
     lines.append("|---------|-------|--------:|-----------:|----------:|----------:|---------:|---------:|---------:|---------:|")
@@ -321,24 +349,27 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append("---")
     lines.append("")
 
-    lines.append("## Efficiency — Throughput vs container cost")
+    lines.append("## Efficiency — Throughput vs cfwarp container cost")
     lines.append("")
-    lines.append("| Variant | iperf3 Median (Mbit/s) | iperf3 CPU Mean % | iperf3 CPU Max % | iperf3 Mem Peak | Mbit/s per CPU% | HTTP Mean (MB/s) | HTTP CPU Mean % |")
-    lines.append("|---------|----------------------:|------------------:|-----------------:|----------------:|----------------:|----------------:|----------------:|")
+    lines.append("| Variant | Upload Median (Mbit/s) | Download Median (Mbit/s) | iperf3 CPU Mean % | iperf3 CPU Max % | iperf3 Mem Peak | Upload Mbit/s per CPU% | HTTP Mean (MB/s) | HTTP CPU Mean % | HTTP Mem Peak |")
+    lines.append("|---------|----------------------:|------------------------:|------------------:|-----------------:|----------------:|----------------------:|----------------:|----------------:|--------------:|")
     for variant in sorted(set(list(iperf3.keys()) + list(http.keys()))):
-        ip_vals = iperf3.get(variant, {}).get("success", [])
+        ip_up = iperf3.get(variant, {}).get("upload", [])
+        ip_down = iperf3.get(variant, {}).get("download", [])
         http_vals = http.get(variant, {}).get("speed_bps", [])
         ip_stats = stats.get((variant, "iperf3"), {})
         http_stats = stats.get((variant, "http"), {})
-        ip_median_mbps = percentile(ip_vals, 0.50) / 1e6 if ip_vals else float("nan")
+        ip_up_median = percentile(ip_up, 0.50) / 1e6 if ip_up else float("nan")
+        ip_down_median = percentile(ip_down, 0.50) / 1e6 if ip_down else float("nan")
         ip_cpu_mean = ip_stats.get("cpu_mean", float("nan"))
         ip_cpu_max = ip_stats.get("cpu_max", float("nan"))
         ip_mem_peak = ip_stats.get("mem_max_bytes", float("nan"))
-        eff = ip_median_mbps / ip_cpu_mean if ip_vals and ip_cpu_mean and not math.isnan(ip_cpu_mean) and ip_cpu_mean > 0 else float("nan")
+        eff = ip_up_median / ip_cpu_mean if ip_up and ip_cpu_mean and not math.isnan(ip_cpu_mean) and ip_cpu_mean > 0 else float("nan")
         http_mean_mibs = mean(http_vals) / (1024**2) if http_vals else float("nan")
         http_cpu_mean = http_stats.get("cpu_mean", float("nan"))
+        http_mem_peak = http_stats.get("mem_max_bytes", float("nan"))
         lines.append(
-            f"| {variant:<8} | {safe_fmt(ip_median_mbps)} | {safe_fmt(ip_cpu_mean, digits=2)} | {safe_fmt(ip_cpu_max, digits=2)} | {human_bytes(ip_mem_peak)} | {safe_fmt(eff, digits=2)} | {safe_fmt(http_mean_mibs, digits=2)} | {safe_fmt(http_cpu_mean, digits=2)} |"
+            f"| {variant:<8} | {safe_fmt(ip_up_median)} | {safe_fmt(ip_down_median)} | {safe_fmt(ip_cpu_mean, digits=2)} | {safe_fmt(ip_cpu_max, digits=2)} | {human_bytes(ip_mem_peak)} | {safe_fmt(eff, digits=2)} | {safe_fmt(http_mean_mibs, digits=2)} | {safe_fmt(http_cpu_mean, digits=2)} | {human_bytes(http_mem_peak)} |"
         )
     lines.append("")
     lines.append("---")
@@ -352,7 +383,10 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
             anomalies.append(f"- {variant}: latency probe errors={section['errors']}")
     for variant, section in sorted(iperf3.items()):
         if section["errors"]:
-            anomalies.append(f"- {variant}: iperf3 failed runs={section['errors']}")
+            anomalies.append(f"- {variant}: iperf3 failed directions={section['errors']}")
+        incomplete = [run for run, dirs in section["runs"].items() if not {"upload", "download"}.issubset(dirs)]
+        if incomplete:
+            anomalies.append(f"- {variant}: iperf3 incomplete bidirectional runs={','.join(sorted(incomplete))}")
     for variant, section in sorted(http.items()):
         bad_codes = sorted({code for code in section["codes"] if code and code != "200"})
         if section["errors"]:
@@ -365,10 +399,6 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
 
     shared = common_variants(latency, iperf3, http)
     if len(shared) >= 2 and {"alpine", "debian"}.issubset(shared):
-        lines.append("---")
-        lines.append("")
-        lines.append("## Alpine vs Debian quick comparison")
-        lines.append("")
         def delta_pct(new: float, old: float) -> str:
             if any(math.isnan(x) for x in [new, old]) or old == 0:
                 return "n/a"
@@ -376,14 +406,18 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
 
         a_lat = mean(latency["alpine"]["success"]) if latency["alpine"]["success"] else float("nan")
         d_lat = mean(latency["debian"]["success"]) if latency["debian"]["success"] else float("nan")
-        a_ip = percentile(iperf3["alpine"]["success"], 0.50) / 1e6 if iperf3["alpine"]["success"] else float("nan")
-        d_ip = percentile(iperf3["debian"]["success"], 0.50) / 1e6 if iperf3["debian"]["success"] else float("nan")
+        a_ip = percentile(iperf3["alpine"]["upload"], 0.50) / 1e6 if iperf3["alpine"]["upload"] else float("nan")
+        d_ip = percentile(iperf3["debian"]["upload"], 0.50) / 1e6 if iperf3["debian"]["upload"] else float("nan")
         a_http = mean(http["alpine"]["speed_bps"]) / (1024**2) if http["alpine"]["speed_bps"] else float("nan")
         d_http = mean(http["debian"]["speed_bps"]) / (1024**2) if http["debian"]["speed_bps"] else float("nan")
+        lines.append("---")
+        lines.append("")
+        lines.append("## Alpine vs Debian quick comparison")
+        lines.append("")
         lines.append("| Metric | Alpine | Debian | Debian vs Alpine |")
         lines.append("|--------|------:|-------:|-----------------:|")
         lines.append(f"| Mean latency (ms) | {safe_fmt(a_lat)} | {safe_fmt(d_lat)} | {delta_pct(d_lat, a_lat)} |")
-        lines.append(f"| iperf3 median (Mbit/s) | {safe_fmt(a_ip)} | {safe_fmt(d_ip)} | {delta_pct(d_ip, a_ip)} |")
+        lines.append(f"| iperf3 upload median (Mbit/s) | {safe_fmt(a_ip)} | {safe_fmt(d_ip)} | {delta_pct(d_ip, a_ip)} |")
         lines.append(f"| HTTP mean (MB/s) | {safe_fmt(a_http, digits=2)} | {safe_fmt(d_http, digits=2)} | {delta_pct(d_http, a_http)} |")
         lines.append("")
 
@@ -407,9 +441,10 @@ def main() -> None:
     latency = collect_latency(load_csv(latency_path))
     iperf3 = collect_iperf3(load_csv(iperf3_path))
     http = collect_http(load_csv(http_path))
-    stats = summarize_stats(collect_stats(load_csv(stats_path)))
+    stats_grouped = collect_stats(load_csv(stats_path))
+    stats_summary, stats_raw = summarize_stats(stats_grouped)
 
-    markdown = build_markdown(args, latency, iperf3, http, stats)
+    markdown = build_markdown(args, latency, iperf3, http, stats_summary)
     output = Path(args.output) if args.output else results_dir / f"report_{ts}.md"
     json_output = Path(args.json_output) if args.json_output else results_dir / f"summary_{ts}.json"
     output.write_text(markdown)
@@ -419,9 +454,20 @@ def main() -> None:
         "proxy_host": args.proxy_host,
         "bench_server": args.bench_server,
         "latency": latency,
-        "iperf3": iperf3,
+        "iperf3": {
+            variant: {
+                "upload": section["upload"],
+                "download": section["download"],
+                "upload_retransmits": section["upload_retransmits"],
+                "download_retransmits": section["download_retransmits"],
+                "errors": section["errors"],
+                "runs": {run: sorted(list(dirs)) for run, dirs in section["runs"].items()},
+            }
+            for variant, section in iperf3.items()
+        },
         "http": http,
-        "resource_usage": {f"{variant}:{phase}": value for (variant, phase), value in stats.items()},
+        "resource_usage_summary": {f"{variant}:{phase}": value for (variant, phase), value in stats_summary.items()},
+        "resource_usage_samples": {f"{variant}:{phase}": value for (variant, phase), value in stats_raw.items()},
         "report_path": str(output),
     }
     json_output.write_text(json.dumps(summary, indent=2, sort_keys=True))
