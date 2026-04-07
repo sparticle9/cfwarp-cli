@@ -18,6 +18,10 @@ on:
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-push:
     name: Build & Push (${{ matrix.variant }})
