@@ -3,6 +3,7 @@ package backend
 
 import (
 	"context"
+	"time"
 
 	"github.com/nexus/cfwarp-cli/internal/state"
 )
@@ -27,6 +28,8 @@ type RuntimeInfo struct {
 	ConfigPath    string
 	StdoutLogPath string
 	StderrLogPath string
+	StartedAt     time.Time
+	LastError     string
 }
 
 // BackendStatus is the health snapshot reported by Status.
@@ -45,7 +48,7 @@ type Backend interface {
 	// RenderConfig produces the backend configuration from account + settings.
 	RenderConfig(input RenderInput) (RenderResult, error)
 	// Start launches the backend process and returns runtime metadata.
-	Start(ctx context.Context, result RenderResult, dirs state.Dirs) (RuntimeInfo, error)
+	Start(ctx context.Context, result RenderResult, dirs state.Dirs, foreground bool) (RuntimeInfo, error)
 	// Stop terminates the backend process identified by info.
 	Stop(ctx context.Context, info RuntimeInfo) error
 	// Status reports the current health of the backend.

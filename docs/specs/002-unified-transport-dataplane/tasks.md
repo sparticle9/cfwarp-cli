@@ -6,7 +6,7 @@
   - Add migration helpers and tests covering current `001` state files, invalid runtime combinations, and JSON round-trips for nested MASQUE options.
   - Requirements/design refs: transport-aware account state, desired settings split, migration summary steps 1–2.
 
-- [ ] 2. Introduce a backend/runtime registry and remove hardcoded `sing-box` assumptions from the CLI control path.
+- [x] 2. Introduce a backend/runtime registry and remove hardcoded `sing-box` assumptions from the CLI control path.
   - Replace direct `singbox.*` calls in `cmd/up.go`, `cmd/down.go`, and `cmd/status.go` with a runtime/backend lookup flow.
   - Keep `singbox-wireguard` working as the first registered implementation while making room for a native runtime family.
   - Add tests for registry lookup, unsupported runtime selection, and backwards-compatible behavior of existing commands.

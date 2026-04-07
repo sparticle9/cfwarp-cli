@@ -3,11 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 
 	"github.com/nexus/cfwarp-cli/internal/backend"
-	"github.com/nexus/cfwarp-cli/internal/backend/singbox"
 	"github.com/nexus/cfwarp-cli/internal/state"
 	"github.com/nexus/cfwarp-cli/internal/supervisor"
 	"github.com/spf13/cobra"
@@ -18,8 +15,8 @@ var upForeground bool
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Start the WARP proxy backend",
-	Long: `up validates prerequisites, renders the backend configuration, and
-launches the sing-box WireGuard proxy. Use --foreground to keep it in the
+	Long: `up validates prerequisites, renders the selected backend configuration,
+and launches the configured proxy backend. Use --foreground to keep it in the
 foreground (useful for Docker entrypoints).`,
 	RunE: func(c *cobra.Command, args []string) error {
 		if err := platformCheck(); err != nil {
@@ -44,7 +41,11 @@ foreground (useful for Docker entrypoints).`,
 			return fmt.Errorf("resolve settings: %w", err)
 		}
 
-		if err := singbox.ValidatePrereqs(c.Context()); err != nil {
+		b, err := configuredBackend(sett)
+		if err != nil {
+			return err
+		}
+		if err := b.ValidatePrereqs(c.Context()); err != nil {
 			return err
 		}
 
@@ -57,30 +58,25 @@ foreground (useful for Docker entrypoints).`,
 			_ = state.ClearRuntime(dirs)
 		}
 
-		// Render config and write to runtime dir (mode 0600).
-		data, err := singbox.Render(backend.RenderInput{Account: acc, Settings: sett})
+		result, err := b.RenderConfig(backend.RenderInput{Account: acc, Settings: sett})
 		if err != nil {
 			return fmt.Errorf("render config: %w", err)
 		}
-		configPath := dirs.BackendConfigFile()
-		if err := os.WriteFile(configPath, data, 0o600); err != nil {
-			return fmt.Errorf("write backend config: %w", err)
-		}
-
-		singboxBin, _ := exec.LookPath("sing-box")
-		cfg := supervisor.StartConfig{
-			Command:    []string{singboxBin, "run", "-c", configPath},
-			LogDir:     dirs.LogDir(),
-			Backend:    sett.Backend,
-			Foreground: upForeground,
-		}
 
 		fmt.Fprintf(c.OutOrStdout(), "Starting %s (foreground=%v)…\n", sett.Backend, upForeground)
+		info, startErr := b.Start(c.Context(), result, dirs, upForeground)
 
-		rt, startErr := supervisor.Start(c.Context(), cfg)
+		rt := state.RuntimeState{
+			PID:           info.PID,
+			Backend:       sett.Backend,
+			ConfigPath:    info.ConfigPath,
+			StdoutLogPath: info.StdoutLogPath,
+			StderrLogPath: info.StderrLogPath,
+			StartedAt:     info.StartedAt,
+			LastError:     info.LastError,
+		}
 
 		// Persist runtime metadata even on error so 'status' can report it.
-		rt.ConfigPath = configPath
 		if saveErr := state.SaveRuntime(dirs, rt); saveErr != nil {
 			fmt.Fprintf(c.ErrOrStderr(), "warning: could not save runtime state: %v\n", saveErr)
 		}
@@ -90,9 +86,9 @@ foreground (useful for Docker entrypoints).`,
 		}
 
 		if !upForeground {
-			fmt.Fprintf(c.OutOrStdout(), "Backend started (PID %d)\n", rt.PID)
+			fmt.Fprintf(c.OutOrStdout(), "Backend started (PID %d)\n", info.PID)
 			fmt.Fprintf(c.OutOrStdout(), "Proxy listening on %s:%d (%s)\n",
-				sett.ListenHost, sett.ListenPort, sett.ProxyMode)
+				sett.ListenHost, sett.ListenPort, sett.Mode)
 		}
 		return nil
 	},

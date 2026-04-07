@@ -12,7 +12,7 @@ import (
 var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop the running WARP proxy backend",
-	Long:  `down stops the managed sing-box process and removes transient runtime files.`,
+	Long:  `down stops the managed backend process and removes transient runtime files.`,
 	RunE: func(c *cobra.Command, args []string) error {
 		if err := platformCheck(); err != nil {
 			return err
@@ -33,8 +33,13 @@ var downCmd = &cobra.Command{
 			return state.ClearRuntime(dirs)
 		}
 
+		b, err := runtimeBackend(rt)
+		if err != nil {
+			return err
+		}
+
 		fmt.Fprintf(c.OutOrStdout(), "Stopping backend (PID %d)…\n", rt.PID)
-		if err := supervisor.Stop(rt); err != nil {
+		if err := b.Stop(c.Context(), runtimeInfo(rt)); err != nil {
 			return fmt.Errorf("stop backend: %w", err)
 		}
 
