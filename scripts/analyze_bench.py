@@ -182,6 +182,30 @@ def collect_http(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
     return grouped
 
 
+def collect_k6(rows: list[dict[str, str]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        grouped[row.get("variant", "unknown")][row.get("profile", "unknown")].append(
+            {
+                "vus": to_float(row.get("vus")),
+                "duration_s": to_float(row.get("duration_s")),
+                "http_reqs": to_float(row.get("http_reqs")),
+                "rps": to_float(row.get("rps")),
+                "error_rate": to_float(row.get("error_rate")),
+                "p50_ms": to_float(row.get("p50_ms")),
+                "p95_ms": to_float(row.get("p95_ms")),
+                "p99_ms": to_float(row.get("p99_ms")),
+                "max_ms": to_float(row.get("max_ms")),
+                "waiting_p95_ms": to_float(row.get("waiting_p95_ms")),
+                "connect_p95_ms": to_float(row.get("connect_p95_ms")),
+                "tls_p95_ms": to_float(row.get("tls_p95_ms")),
+                "blocked_p95_ms": to_float(row.get("blocked_p95_ms")),
+                "iteration_p95_ms": to_float(row.get("iteration_p95_ms")),
+            }
+        )
+    return grouped
+
+
 def collect_stats(rows: list[dict[str, str]]) -> dict[tuple[str, str], dict[str, Any]]:
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {
@@ -254,7 +278,7 @@ def summarize_stats(grouped: dict[tuple[str, str], dict[str, Any]]) -> tuple[dic
     return summary, raw
 
 
-def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: dict[str, Any], http: dict[str, Any], stats: dict[tuple[str, str], Any]) -> str:
+def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: dict[str, Any], http: dict[str, Any], k6: dict[str, Any], stats: dict[tuple[str, str], Any]) -> str:
     lines: list[str] = []
     lines.append("# cfwarp-cli Benchmark Report")
     lines.append("")
@@ -336,14 +360,38 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append("---")
     lines.append("")
 
-    lines.append("## Resource Usage (docker stats over time)")
+    lines.append("## API-like workload — k6 summary")
+    lines.append("")
+    lines.append("| Variant | Profile | VUs | RPS | Error Rate | p50 ms | p95 ms | p99 ms | Max ms | Waiting p95 | Connect p95 | Iter p95 |")
+    lines.append("|---------|---------|---:|----:|-----------:|-------:|-------:|-------:|------:|------------:|------------:|---------:|")
+    for variant in sorted(k6):
+        for profile in sorted(k6[variant]):
+            rows = k6[variant][profile]
+            rps = [r['rps'] for r in rows if r['rps'] is not None]
+            err = [r['error_rate'] for r in rows if r['error_rate'] is not None]
+            p50s = [r['p50_ms'] for r in rows if r['p50_ms'] is not None]
+            p95s = [r['p95_ms'] for r in rows if r['p95_ms'] is not None]
+            p99s = [r['p99_ms'] for r in rows if r['p99_ms'] is not None]
+            maxs = [r['max_ms'] for r in rows if r['max_ms'] is not None]
+            waits = [r['waiting_p95_ms'] for r in rows if r['waiting_p95_ms'] is not None]
+            conns = [r['connect_p95_ms'] for r in rows if r['connect_p95_ms'] is not None]
+            iters = [r['iteration_p95_ms'] for r in rows if r['iteration_p95_ms'] is not None]
+            vus = rows[0]['vus'] if rows else None
+            lines.append(
+                f"| {variant:<8} | {profile:<7} | {safe_fmt(vus, digits=0)} | {safe_fmt(mean(rps))} | {safe_fmt(mean(err), digits=3)} | {safe_fmt(mean(p50s))} | {safe_fmt(mean(p95s))} | {safe_fmt(mean(p99s))} | {safe_fmt(mean(maxs))} | {safe_fmt(mean(waits))} | {safe_fmt(mean(conns))} | {safe_fmt(mean(iters))} |"
+            )
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    lines.append("## Resource Usage (per benchmarked container over time)")
     lines.append("")
     lines.append("| Variant | Phase | Samples | CPU Mean % | CPU p95 % | CPU Max % | Mem Mean | Mem Peak | Net RX Δ | Net TX Δ |")
     lines.append("|---------|-------|--------:|-----------:|----------:|----------:|---------:|---------:|---------:|---------:|")
     for (variant, phase) in sorted(stats):
         entry = stats[(variant, phase)]
         lines.append(
-            f"| {variant:<8} | {phase:<7} | {entry['samples']} | "
+            f"| {variant:<8} | {phase:<12} | {entry['samples']} | "
             f"{safe_fmt(entry['cpu_mean'], digits=2)} | {safe_fmt(entry['cpu_p95'], digits=2)} | {safe_fmt(entry['cpu_max'], digits=2)} | "
             f"{human_bytes(entry['mem_mean_bytes'])} | {human_bytes(entry['mem_max_bytes'])} | "
             f"{human_bytes(entry['net_rx_delta_bytes'])} | {human_bytes(entry['net_tx_delta_bytes'])} |"
@@ -352,7 +400,7 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append("---")
     lines.append("")
 
-    lines.append("## Efficiency — Throughput vs cfwarp container cost")
+    lines.append("## Efficiency — Throughput vs benchmarked container cost")
     lines.append("")
     lines.append("| Variant | Upload Median (Mbit/s) | Download Median (Mbit/s) | iperf3 CPU Mean % | iperf3 CPU Max % | iperf3 Mem Peak | Upload Mbit/s per CPU% | HTTP Mean (MB/s) | HTTP CPU Mean % | HTTP Mem Peak |")
     lines.append("|---------|----------------------:|------------------------:|------------------:|-----------------:|----------------:|----------------------:|----------------:|----------------:|--------------:|")
@@ -395,6 +443,10 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
         if section["errors"]:
             suffix = f" (http codes: {', '.join(bad_codes)})" if bad_codes else ""
             anomalies.append(f"- {variant}: HTTP failed runs={section['errors']}{suffix}")
+    for variant, profiles in sorted(k6.items()):
+        for profile, rows in sorted(profiles.items()):
+            if any((r['error_rate'] or 0) >= 0.01 for r in rows):
+                anomalies.append(f"- {variant}: k6 profile {profile} exceeded 1% error rate")
     if not anomalies:
         anomalies.append("- No failed runs recorded in the fetched CSVs.")
     lines.extend(anomalies)
@@ -406,17 +458,18 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
         lines.append("")
         lines.append("## Cross-variant summary")
         lines.append("")
-        lines.append("| Variant | Mean latency (ms) | iperf3 upload median (Mbit/s) | iperf3 download median (Mbit/s) | HTTP mean (MB/s) | iperf3 Mem Peak | HTTP Mem Peak |")
-        lines.append("|---------|------------------:|------------------------------:|--------------------------------:|-----------------:|----------------:|--------------:|")
+        lines.append("| Variant | Mean latency (ms) | iperf3 upload median (Mbit/s) | iperf3 download median (Mbit/s) | HTTP mean (MB/s) | k6 small p95 (ms) | iperf3 Mem Peak | HTTP Mem Peak |")
+        lines.append("|---------|------------------:|------------------------------:|--------------------------------:|-----------------:|------------------:|----------------:|--------------:|")
         for variant in shared:
             lat_mean = mean(latency[variant]["success"]) if latency[variant]["success"] else float("nan")
             ip_up = percentile(iperf3[variant]["upload"], 0.50) / 1e6 if iperf3[variant]["upload"] else float("nan")
             ip_down = percentile(iperf3[variant]["download"], 0.50) / 1e6 if iperf3[variant]["download"] else float("nan")
             http_mean = mean(http[variant]["speed_bps"]) / (1024**2) if http[variant]["speed_bps"] else float("nan")
+            k6_small = mean([r['p95_ms'] for r in k6.get(variant, {}).get('small', []) if r['p95_ms'] is not None])
             ip_mem_peak = stats.get((variant, "iperf3"), {}).get("mem_max_bytes", float("nan"))
             http_mem_peak = stats.get((variant, "http"), {}).get("mem_max_bytes", float("nan"))
             lines.append(
-                f"| {variant:<8} | {safe_fmt(lat_mean)} | {safe_fmt(ip_up)} | {safe_fmt(ip_down)} | {safe_fmt(http_mean, digits=2)} | {human_bytes(ip_mem_peak)} | {human_bytes(http_mem_peak)} |"
+                f"| {variant:<8} | {safe_fmt(lat_mean)} | {safe_fmt(ip_up)} | {safe_fmt(ip_down)} | {safe_fmt(http_mean, digits=2)} | {safe_fmt(k6_small)} | {human_bytes(ip_mem_peak)} | {human_bytes(http_mem_peak)} |"
             )
         lines.append("")
 
@@ -431,19 +484,21 @@ def main() -> None:
     latency_path = results_dir / f"latency_{ts}.csv"
     iperf3_path = results_dir / f"throughput_iperf3_{ts}.csv"
     http_path = results_dir / f"throughput_http_{ts}.csv"
+    k6_path = results_dir / f"k6_summary_{ts}.csv"
     stats_path = results_dir / f"container_stats_{ts}.csv"
 
-    for path in [latency_path, iperf3_path, http_path, stats_path]:
+    for path in [latency_path, iperf3_path, http_path, k6_path, stats_path]:
         if not path.exists():
             raise SystemExit(f"missing input CSV: {path}")
 
     latency = collect_latency(load_csv(latency_path))
     iperf3 = collect_iperf3(load_csv(iperf3_path))
     http = collect_http(load_csv(http_path))
+    k6 = collect_k6(load_csv(k6_path))
     stats_grouped = collect_stats(load_csv(stats_path))
     stats_summary, stats_raw = summarize_stats(stats_grouped)
 
-    markdown = build_markdown(args, latency, iperf3, http, stats_summary)
+    markdown = build_markdown(args, latency, iperf3, http, k6, stats_summary)
     output = Path(args.output) if args.output else results_dir / f"report_{ts}.md"
     json_output = Path(args.json_output) if args.json_output else results_dir / f"summary_{ts}.json"
     output.write_text(markdown)
@@ -466,6 +521,7 @@ def main() -> None:
             for variant, section in iperf3.items()
         },
         "http": http,
+        "k6": k6,
         "resource_usage_summary": {f"{variant}:{phase}": value for (variant, phase), value in stats_summary.items()},
         "resource_usage_samples": {f"{variant}:{phase}": value for (variant, phase), value in stats_raw.items()},
         "report_path": str(output),

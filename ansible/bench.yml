@@ -3,11 +3,11 @@
 #
 # ── Topology ─────────────────────────────────────────────────────────────────
 #   localhost  Ansible controller — orchestrates only
-#   tyo        Proxy host — runs cfwarp + client containers
-#   laxhd      Bench target — iperf3-server + nginx in Docker
+#   tyo        Proxy host — runs warp variants + load-generator containers
+#   laxhd      Bench target — iperf3-server + nginx + httpbin in Docker
 #
 # ── Tags (run stages independently to avoid full restarts) ───────────────────
-#   servers        Play 1: start iperf3 + nginx on laxhd
+#   servers        Play 1: start/reuse iperf3 + nginx + httpbin on laxhd
 #   prepare        Play 2: pull images, register WARP account on tyo
 #   bench-alpine   Play 3a: run measurements for alpine variant only
 #   bench-debian   Play 3b: run measurements for debian variant only
@@ -58,17 +58,31 @@
       register: _nginx_status
       changed_when: false
 
+    - name: Inspect existing httpbin container
+      ansible.builtin.shell: docker inspect -f '{{ "{{.State.Status}}" }}' bench-httpbin 2>/dev/null || true
+      register: _httpbin_status
+      changed_when: false
+
     - name: Reuse existing iperf3 port if container is already running
-      ansible.builtin.shell: docker inspect -f '{{ "{{(index (index .NetworkSettings.Ports \"5201/tcp\") 0).HostPort}}" }}' bench-iperf3
+      ansible.builtin.shell: |
+        docker inspect bench-iperf3 | python3 -c "import json,sys; data=json.load(sys.stdin)[0]; print(data['NetworkSettings']['Ports']['5201/tcp'][0]['HostPort'])"
       register: _iperf3_port_existing
       changed_when: false
       when: (_iperf3_status.stdout | trim) == 'running'
 
     - name: Reuse existing nginx port if container is already running
-      ansible.builtin.shell: docker inspect -f '{{ "{{(index (index .NetworkSettings.Ports \"80/tcp\") 0).HostPort}}" }}' bench-nginx
+      ansible.builtin.shell: |
+        docker inspect bench-nginx | python3 -c "import json,sys; data=json.load(sys.stdin)[0]; print(data['NetworkSettings']['Ports']['80/tcp'][0]['HostPort'])"
       register: _nginx_port_existing
       changed_when: false
       when: (_nginx_status.stdout | trim) == 'running'
+
+    - name: Reuse existing httpbin port if container is already running
+      ansible.builtin.shell: |
+        docker inspect bench-httpbin | python3 -c "import json,sys; data=json.load(sys.stdin)[0]; print(data['NetworkSettings']['Ports']['8080/tcp'][0]['HostPort'])"
+      register: _httpbin_port_existing
+      changed_when: false
+      when: (_httpbin_status.stdout | trim) == 'running'
 
     - name: Find free port for iperf3 if not already running
       ansible.builtin.shell: |
@@ -89,10 +103,21 @@
       changed_when: false
       when: (_nginx_status.stdout | trim) != 'running'
 
+    - name: Find free port for httpbin if not already running
+      ansible.builtin.shell: |
+        taken={{ (_nginx_port_new.stdout | trim) if (_nginx_port_new is defined and _nginx_port_new.stdout is defined) else ((_nginx_port_existing.stdout | trim) if (_nginx_port_existing is defined and _nginx_port_existing.stdout is defined) else '18080') }}
+        port=$(( 18082 > taken ? 18082 : taken + 1 ))
+        while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do port=$((port+1)); done
+        echo $port
+      register: _httpbin_port_new
+      changed_when: false
+      when: (_httpbin_status.stdout | trim) != 'running'
+
     - name: Remove stale non-running bench containers
       ansible.builtin.shell: |
         [ "{{ _iperf3_status.stdout | trim }}" = "running" ] || docker rm -f bench-iperf3 2>/dev/null || true
         [ "{{ _nginx_status.stdout | trim }}" = "running" ] || docker rm -f bench-nginx 2>/dev/null || true
+        [ "{{ _httpbin_status.stdout | trim }}" = "running" ] || docker rm -f bench-httpbin 2>/dev/null || true
       changed_when: false
 
     - name: Start iperf3 server if needed
@@ -123,10 +148,19 @@
           '
       when: (_nginx_status.stdout | trim) != 'running'
 
+    - name: Start httpbin API server if needed
+      ansible.builtin.shell: |
+        docker run -d --name bench-httpbin \
+          -p "{{ _httpbin_port_new.stdout | trim }}:8080" \
+          --restart no \
+          mccutchen/go-httpbin:v2.15.0
+      when: (_httpbin_status.stdout | trim) != 'running'
+
     - name: Store ports as host facts
       ansible.builtin.set_fact:
         iperf3_port: "{{ (_iperf3_port_existing.stdout | trim) if (_iperf3_port_existing is defined and _iperf3_port_existing.stdout is defined and (_iperf3_port_existing.stdout | trim) != '') else (_iperf3_port_new.stdout | trim) }}"
         nginx_port:  "{{ (_nginx_port_existing.stdout | trim) if (_nginx_port_existing is defined and _nginx_port_existing.stdout is defined and (_nginx_port_existing.stdout | trim) != '') else (_nginx_port_new.stdout | trim) }}"
+        api_port:    "{{ (_httpbin_port_existing.stdout | trim) if (_httpbin_port_existing is defined and _httpbin_port_existing.stdout is defined and (_httpbin_port_existing.stdout | trim) != '') else (_httpbin_port_new.stdout | trim) }}"
 
     - name: Wait for iperf3 port
       ansible.builtin.wait_for:
@@ -138,9 +172,14 @@
         port: "{{ nginx_port }}"
         timeout: 120
 
+    - name: Wait for httpbin port
+      ansible.builtin.wait_for:
+        port: "{{ api_port }}"
+        timeout: 60
+
     - name: Report ports
       ansible.builtin.debug:
-        msg: "laxhd  iperf3={{ iperf3_port }}  nginx={{ nginx_port }}"
+        msg: "laxhd  iperf3={{ iperf3_port }}  nginx={{ nginx_port }}  httpbin={{ api_port }}"
 
 
 # ── Play 2: Prepare tyo ───────────────────────────────────────────────────────
@@ -166,6 +205,10 @@
 
     - name: Pull microwarp image
       ansible.builtin.shell: docker pull {{ microwarp_image }}
+      changed_when: false
+
+    - name: Pull k6 image
+      ansible.builtin.shell: docker pull grafana/k6:latest
       changed_when: false
 
     - name: Check if state volume exists
@@ -196,6 +239,12 @@
         src: files/docker_stats.sh
         dest: /tmp/docker_stats.sh
         mode: "0755"
+
+    - name: Copy generic k6 API benchmark script
+      ansible.builtin.copy:
+        src: files/k6_api.js
+        dest: /tmp/k6_api.js
+        mode: "0644"
 
     - name: Resolve laxhd IP for container-internal use
       ansible.builtin.set_fact:
@@ -229,6 +278,12 @@
     # Override with -e iperf3_port=15202 if running this play standalone.
     iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('iperf3_port', iperf3_port_default | default('15201')) }}"
     nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
+    api_port:    "{{ hostvars[groups['bench_server'][0]].get('api_port',    api_port_default  | default('18082')) }}"
+    k6_profiles:
+      - { name: small,  method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,      vus: 64, duration: "30s" }
+      - { name: medium, method: POST, path: "/post",              body_bytes: 8192,   vus: 48, duration: "30s" }
+      - { name: upload, method: POST, path: "/post",              body_bytes: 262144, vus: 16, duration: "30s" }
+      - { name: stream, method: GET,  path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "30s" }
     bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
                 lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
                 + \" | awk '/^hostname /{print $2}'\")) }}"
@@ -257,12 +312,15 @@
     - name: Create results dir and write CSV headers
       ansible.builtin.shell: |
         mkdir -p /tmp/bench-{{ bench_ts }}
+        chmod 0777 /tmp/bench-{{ bench_ts }}
         [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
           echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
           echo "variant,run,direction,bits_per_second,retransmits" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        [ -f /tmp/bench-{{ bench_ts }}/k6_summary.csv ] || \
+          echo "variant,profile,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
           echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
@@ -290,6 +348,12 @@
     tunnel_wait_sec: 60
     iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('iperf3_port', iperf3_port_default | default('15201')) }}"
     nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
+    api_port:    "{{ hostvars[groups['bench_server'][0]].get('api_port',    api_port_default  | default('18082')) }}"
+    k6_profiles:
+      - { name: small,  method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,      vus: 64, duration: "30s" }
+      - { name: medium, method: POST, path: "/post",              body_bytes: 8192,   vus: 48, duration: "30s" }
+      - { name: upload, method: POST, path: "/post",              body_bytes: 262144, vus: 16, duration: "30s" }
+      - { name: stream, method: GET,  path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "30s" }
     bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
                 lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
                 + \" | awk '/^hostname /{print $2}'\")) }}"
@@ -315,12 +379,15 @@
     - name: Create results dir and write CSV headers
       ansible.builtin.shell: |
         mkdir -p /tmp/bench-{{ bench_ts }}
+        chmod 0777 /tmp/bench-{{ bench_ts }}
         [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
           echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
           echo "variant,run,direction,bits_per_second,retransmits" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        [ -f /tmp/bench-{{ bench_ts }}/k6_summary.csv ] || \
+          echo "variant,profile,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
           echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
@@ -348,6 +415,12 @@
     tunnel_wait_sec: 90
     iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('iperf3_port', iperf3_port_default | default('15201')) }}"
     nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
+    api_port:    "{{ hostvars[groups['bench_server'][0]].get('api_port',    api_port_default  | default('18082')) }}"
+    k6_profiles:
+      - { name: small,  method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,      vus: 64, duration: "30s" }
+      - { name: medium, method: POST, path: "/post",              body_bytes: 8192,   vus: 48, duration: "30s" }
+      - { name: upload, method: POST, path: "/post",              body_bytes: 262144, vus: 16, duration: "30s" }
+      - { name: stream, method: GET,  path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "30s" }
     bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
                 lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
                 + \" | awk '/^hostname /{print $2}'\")) }}"
@@ -377,12 +450,15 @@
     - name: Create results dir and write CSV headers
       ansible.builtin.shell: |
         mkdir -p /tmp/bench-{{ bench_ts }}
+        chmod 0777 /tmp/bench-{{ bench_ts }}
         [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
           echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
           echo "variant,run,direction,bits_per_second,retransmits" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        [ -f /tmp/bench-{{ bench_ts }}/k6_summary.csv ] || \
+          echo "variant,profile,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
           echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
@@ -424,6 +500,7 @@
         - latency.csv
         - throughput_iperf3.csv
         - throughput_http.csv
+        - k6_summary.csv
         - container_stats.csv
 
     - name: Generate markdown + JSON report locally with Python analyzer

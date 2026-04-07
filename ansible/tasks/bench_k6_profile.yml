@@ -1,0 +1,90 @@
+---
+# Expects: variant.name, bench_ts, k6_profile, bench_ip, api_port
+
+- name: "[{{ variant.name }}][{{ k6_profile.name }}] Start k6 docker stats sampler"
+  ansible.builtin.shell: |
+    pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.name }}-sampler.pid
+    statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-k6-{{ k6_profile.name }}.state
+    rm -f "$pidfile" "$statefile"
+    nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" "k6-{{ k6_profile.name }}" cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
+    echo $! > "$pidfile"
+  changed_when: false
+
+- name: "[{{ variant.name }}][{{ k6_profile.name }}] Run k6 workload"
+  ansible.builtin.shell: |
+    docker run --rm \
+      --user 0:0 \
+      --network container:cfwarp-bench-{{ variant.name }} \
+      -v /tmp/k6_api.js:/scripts/k6_api.js:ro \
+      -v /tmp/bench-{{ bench_ts }}:/results \
+      -e PROFILE='{{ k6_profile.name }}' \
+      -e 'TARGET_URL=http://{{ bench_ip }}:{{ api_port }}{{ k6_profile.path }}' \
+      -e METHOD='{{ k6_profile.method }}' \
+      -e BODY_BYTES='{{ k6_profile.body_bytes | string }}' \
+      -e VUS='{{ k6_profile.vus | string }}' \
+      -e DURATION='{{ k6_profile.duration }}' \
+      grafana/k6:latest run --summary-export /results/k6_{{ variant.name }}_{{ k6_profile.name }}.json /scripts/k6_api.js
+  register: _k6_run
+  changed_when: false
+
+- name: "[{{ variant.name }}][{{ k6_profile.name }}] Append k6 summary row"
+  ansible.builtin.shell: |
+    python3 - <<'PY'
+    import json
+    from pathlib import Path
+    p = Path('/tmp/bench-{{ bench_ts }}/k6_{{ variant.name }}_{{ k6_profile.name }}.json')
+    data = json.loads(p.read_text())
+    m = data.get('metrics', {})
+
+    def val(metric, key, default=0):
+        metric_obj = m.get(metric, {})
+        if key in metric_obj:
+            return metric_obj.get(key, default)
+        return metric_obj.get('value', default)
+
+    row = [
+        '{{ variant.name }}',
+        '{{ k6_profile.name }}',
+        '{{ k6_profile.vus }}',
+        '{{ k6_profile.duration }}'.rstrip('s'),
+        str(val('http_reqs', 'count', 0)),
+        str(val('http_reqs', 'rate', 0)),
+        str(val('http_req_failed', 'rate', 0)),
+        str(val('http_req_duration', 'med', 0)),
+        str(val('http_req_duration', 'p(95)', 0)),
+        str(val('http_req_duration', 'p(99)', 0)),
+        str(val('http_req_duration', 'max', 0)),
+        str(val('http_req_waiting', 'p(95)', 0)),
+        str(val('http_req_connecting', 'p(95)', 0)),
+        str(val('http_req_tls_handshaking', 'p(95)', 0)),
+        str(val('http_req_blocked', 'p(95)', 0)),
+        str(val('iteration_duration', 'p(95)', 0)),
+    ]
+    with open('/tmp/bench-{{ bench_ts }}/k6_summary.csv', 'a') as f:
+        f.write(','.join(row) + '\n')
+    PY
+  changed_when: false
+
+- name: "[{{ variant.name }}][{{ k6_profile.name }}] Assert k6 error rate acceptable"
+  ansible.builtin.shell: |
+    python3 - <<'PY'
+    import json
+    from pathlib import Path
+    p = Path('/tmp/bench-{{ bench_ts }}/k6_{{ variant.name }}_{{ k6_profile.name }}.json')
+    data = json.loads(p.read_text())
+    rate = data.get('metrics', {}).get('http_req_failed', {}).get('value', 1)
+    raise SystemExit(0 if float(rate) < 0.01 else 1)
+    PY
+  changed_when: false
+
+- name: "[{{ variant.name }}][{{ k6_profile.name }}] Stop k6 docker stats sampler"
+  ansible.builtin.shell: |
+    pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.name }}-sampler.pid
+    if [ -f "$pidfile" ]; then
+      pid=$(cat "$pidfile")
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      rm -f "$pidfile"
+    fi
+  changed_when: false
+  failed_when: false

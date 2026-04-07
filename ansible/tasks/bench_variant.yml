@@ -278,6 +278,14 @@
       changed_when: false
       failed_when: false
 
+# ── API-like k6 workload suite ────────────────────────────────────────────────
+- name: "[{{ variant.name }}] Run k6 API-like workload profiles"
+  ansible.builtin.include_tasks: bench_k6_profile.yml
+  loop: "{{ k6_profiles }}"
+  loop_control:
+    loop_var: k6_profile
+    label: "{{ k6_profile.name }}"
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 - name: "[{{ variant.name }}] Stop cfwarp container"
   ansible.builtin.shell: docker rm -f cfwarp-bench-{{ variant.name }} 2>/dev/null || true
