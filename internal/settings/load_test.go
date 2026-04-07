@@ -41,14 +41,23 @@ func TestLoad_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if s.Backend != "singbox-wireguard" {
+	if s.Backend != state.BackendSingboxWireGuard {
 		t.Errorf("default backend wrong: %s", s.Backend)
+	}
+	if s.RuntimeFamily != state.RuntimeFamilyLegacy {
+		t.Errorf("default runtime_family wrong: %s", s.RuntimeFamily)
+	}
+	if s.Transport != state.TransportWireGuard {
+		t.Errorf("default transport wrong: %s", s.Transport)
 	}
 	if s.ListenPort != 1080 {
 		t.Errorf("default port wrong: %d", s.ListenPort)
 	}
-	if s.ProxyMode != "socks5" {
-		t.Errorf("default proxy_mode wrong: %s", s.ProxyMode)
+	if s.Mode != state.ModeSocks5 {
+		t.Errorf("default mode wrong: %s", s.Mode)
+	}
+	if s.ProxyMode != state.ModeSocks5 {
+		t.Errorf("default proxy_mode alias wrong: %s", s.ProxyMode)
 	}
 	if s.LogLevel != "info" {
 		t.Errorf("default log_level wrong: %s", s.LogLevel)
@@ -62,6 +71,7 @@ func TestLoad_PersistedOverridesDefaults(t *testing.T) {
 	persisted := state.DefaultSettings()
 	persisted.ListenPort = 9090
 	persisted.EndpointOverride = "162.159.192.1:4500"
+	persisted.Mode = state.ModeHTTP
 	writeSettings(t, d, persisted)
 
 	s, err := settings.Load(d, settings.Overrides{})
@@ -73,6 +83,9 @@ func TestLoad_PersistedOverridesDefaults(t *testing.T) {
 	}
 	if s.EndpointOverride != "162.159.192.1:4500" {
 		t.Errorf("expected endpoint override, got %q", s.EndpointOverride)
+	}
+	if s.Mode != state.ModeHTTP || s.ProxyMode != state.ModeHTTP {
+		t.Errorf("expected mode/proxy alias to be http, got %+v", s)
 	}
 }
 
@@ -99,15 +112,30 @@ func TestLoad_EnvOverridesPersisted(t *testing.T) {
 	}
 }
 
-func TestLoad_EnvProxyMode_Normalised(t *testing.T) {
+func TestLoad_EnvRuntimeSelection(t *testing.T) {
 	d := tempDirs(t)
-	t.Setenv("CFWARP_PROXY_MODE", "HTTP") // uppercase
+	t.Setenv("CFWARP_RUNTIME_FAMILY", "LEGACY")
+	t.Setenv("CFWARP_TRANSPORT", "WIREGUARD")
+	t.Setenv("CFWARP_MODE", "HTTP")
+
 	s, err := settings.Load(d, settings.Overrides{})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if s.ProxyMode != "http" {
-		t.Errorf("expected normalised proxy_mode 'http', got %q", s.ProxyMode)
+	if s.RuntimeFamily != state.RuntimeFamilyLegacy || s.Transport != state.TransportWireGuard || s.Mode != state.ModeHTTP {
+		t.Errorf("expected env runtime selection to be normalised, got %+v", s)
+	}
+}
+
+func TestLoad_EnvProxyMode_Normalised(t *testing.T) {
+	d := tempDirs(t)
+	t.Setenv("CFWARP_PROXY_MODE", "HTTP") // legacy env name
+	s, err := settings.Load(d, settings.Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.Mode != state.ModeHTTP || s.ProxyMode != state.ModeHTTP {
+		t.Errorf("expected normalised mode/proxy alias 'http', got %+v", s)
 	}
 }
 
@@ -136,6 +164,19 @@ func TestLoad_FlagOverridesEnv(t *testing.T) {
 	}
 	if s.ListenPort != 5050 {
 		t.Errorf("expected flag port 5050, got %d", s.ListenPort)
+	}
+}
+
+func TestLoad_FlagModeOverride(t *testing.T) {
+	d := tempDirs(t)
+	t.Setenv("CFWARP_MODE", "http")
+
+	s, err := settings.Load(d, settings.Overrides{Mode: strPtr(state.ModeSocks5)})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.Mode != state.ModeSocks5 || s.ProxyMode != state.ModeSocks5 {
+		t.Errorf("expected flag mode socks5, got %+v", s)
 	}
 }
 
@@ -170,5 +211,16 @@ func TestLoad_FullPrecedenceChain(t *testing.T) {
 	}
 	if s.ListenPort != 5050 {
 		t.Errorf("flag should win (5050), got %d", s.ListenPort)
+	}
+}
+
+func TestLoad_NativeRuntimeCurrentlyRejected(t *testing.T) {
+	d := tempDirs(t)
+	t.Setenv("CFWARP_RUNTIME_FAMILY", "native")
+	t.Setenv("CFWARP_TRANSPORT", "masque")
+
+	_, err := settings.Load(d, settings.Overrides{})
+	if err == nil {
+		t.Fatal("expected native runtime selection to be rejected for now")
 	}
 }

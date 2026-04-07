@@ -1,6 +1,6 @@
 # Implementation Plan — Unified Transport and Shared Data Plane
 
-- [ ] 1. Refactor the persisted state and settings model for transport-aware runtime selection.
+- [x] 1. Refactor the persisted state and settings model for transport-aware runtime selection.
   - Replace the current WireGuard-shaped account model with a schema-versioned structure that can store both WireGuard and MASQUE material without overloading field meanings.
   - Split operator settings into runtime family, transport, and mode, while keeping listen/auth/log settings shared where possible.
   - Add migration helpers and tests covering current `001` state files, invalid runtime combinations, and JSON round-trips for nested MASQUE options.

@@ -8,13 +8,20 @@ import (
 	"github.com/nexus/cfwarp-cli/internal/state"
 )
 
-var validBackends = map[string]bool{
-	"singbox-wireguard": true,
+var validRuntimeFamilies = map[string]bool{
+	state.RuntimeFamilyLegacy: true,
+	state.RuntimeFamilyNative: true,
 }
 
-var validProxyModes = map[string]bool{
-	"socks5": true,
-	"http":   true,
+var validTransports = map[string]bool{
+	state.TransportWireGuard: true,
+	state.TransportMasque:    true,
+}
+
+var validModes = map[string]bool{
+	state.ModeSocks5: true,
+	state.ModeHTTP:   true,
+	state.ModeTUN:    true,
 }
 
 var validLogLevels = map[string]bool{
@@ -27,11 +34,16 @@ var validLogLevels = map[string]bool{
 // Validate checks s for invalid or inconsistent values.
 // It returns the first error found, naming the offending field.
 func Validate(s state.Settings) error {
-	if !validBackends[s.Backend] {
-		return fmt.Errorf("invalid backend %q: must be one of %v", s.Backend, keys(validBackends))
+	s.Normalize()
+
+	if !validRuntimeFamilies[s.RuntimeFamily] {
+		return fmt.Errorf("invalid runtime_family %q: must be one of %v", s.RuntimeFamily, keys(validRuntimeFamilies))
 	}
-	if !validProxyModes[s.ProxyMode] {
-		return fmt.Errorf("invalid proxy_mode %q: must be one of %v", s.ProxyMode, keys(validProxyModes))
+	if !validTransports[s.Transport] {
+		return fmt.Errorf("invalid transport %q: must be one of %v", s.Transport, keys(validTransports))
+	}
+	if !validModes[s.Mode] {
+		return fmt.Errorf("invalid mode %q: must be one of %v", s.Mode, keys(validModes))
 	}
 	if !validLogLevels[s.LogLevel] {
 		return fmt.Errorf("invalid log_level %q: must be one of %v", s.LogLevel, keys(validLogLevels))
@@ -48,6 +60,20 @@ func Validate(s state.Settings) error {
 			return fmt.Errorf("invalid endpoint_override: %w", err)
 		}
 	}
+
+	supportedModes := []string{state.ModeSocks5, state.ModeHTTP}
+	switch s.RuntimeFamily {
+	case state.RuntimeFamilyLegacy:
+		if s.Transport != state.TransportWireGuard {
+			return fmt.Errorf("invalid transport %q for runtime_family %q: must be %q", s.Transport, s.RuntimeFamily, state.TransportWireGuard)
+		}
+		if s.Mode != state.ModeSocks5 && s.Mode != state.ModeHTTP {
+			return fmt.Errorf("invalid mode %q for runtime_family %q: must be one of %v", s.Mode, s.RuntimeFamily, supportedModes)
+		}
+	case state.RuntimeFamilyNative:
+		return fmt.Errorf("runtime_family %q is reserved but not yet supported by this build", s.RuntimeFamily)
+	}
+
 	return nil
 }
 

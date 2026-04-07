@@ -16,9 +16,12 @@ import (
 // A nil pointer means "not set by this source"; a non-nil pointer overrides.
 type Overrides struct {
 	Backend          *string
+	RuntimeFamily    *string
+	Transport        *string
+	ProxyMode        *string
+	Mode             *string
 	ListenHost       *string
 	ListenPort       *int
-	ProxyMode        *string
 	ProxyUsername    *string
 	ProxyPassword    *string
 	EndpointOverride *string
@@ -51,6 +54,7 @@ func Load(dirs state.Dirs, overrides Overrides) (state.Settings, error) {
 
 	// 4. Overlay explicit overrides.
 	applyOverrides(&s, overrides)
+	s.Normalize()
 
 	// 5. Validate.
 	if err := Validate(s); err != nil {
@@ -61,17 +65,30 @@ func Load(dirs state.Dirs, overrides Overrides) (state.Settings, error) {
 
 // applyPersisted copies non-zero persisted fields onto s.
 func applyPersisted(s *state.Settings, p state.Settings) {
+	if p.SchemaVersion != 0 {
+		s.SchemaVersion = p.SchemaVersion
+	}
 	if p.Backend != "" {
 		s.Backend = p.Backend
+	}
+	if p.RuntimeFamily != "" {
+		s.RuntimeFamily = p.RuntimeFamily
+	}
+	if p.Transport != "" {
+		s.Transport = p.Transport
+	}
+	if p.ProxyMode != "" {
+		s.ProxyMode = p.ProxyMode
+		s.Mode = p.ProxyMode
+	}
+	if p.Mode != "" {
+		s.Mode = p.Mode
 	}
 	if p.ListenHost != "" {
 		s.ListenHost = p.ListenHost
 	}
 	if p.ListenPort != 0 {
 		s.ListenPort = p.ListenPort
-	}
-	if p.ProxyMode != "" {
-		s.ProxyMode = p.ProxyMode
 	}
 	if p.ProxyUsername != "" {
 		s.ProxyUsername = p.ProxyUsername
@@ -82,8 +99,14 @@ func applyPersisted(s *state.Settings, p state.Settings) {
 	if p.EndpointOverride != "" {
 		s.EndpointOverride = p.EndpointOverride
 	}
+	if p.StateDir != "" {
+		s.StateDir = p.StateDir
+	}
 	if p.LogLevel != "" {
 		s.LogLevel = p.LogLevel
+	}
+	if p.MasqueOptions != nil {
+		s.MasqueOptions = p.MasqueOptions
 	}
 }
 
@@ -91,6 +114,12 @@ func applyPersisted(s *state.Settings, p state.Settings) {
 func applyEnv(s *state.Settings) {
 	if v := os.Getenv("CFWARP_BACKEND"); v != "" {
 		s.Backend = v
+	}
+	if v := os.Getenv("CFWARP_RUNTIME_FAMILY"); v != "" {
+		s.RuntimeFamily = strings.ToLower(v)
+	}
+	if v := os.Getenv("CFWARP_TRANSPORT"); v != "" {
+		s.Transport = strings.ToLower(v)
 	}
 	if v := os.Getenv("CFWARP_LISTEN_HOST"); v != "" {
 		s.ListenHost = v
@@ -101,7 +130,12 @@ func applyEnv(s *state.Settings) {
 		}
 	}
 	if v := os.Getenv("CFWARP_PROXY_MODE"); v != "" {
-		s.ProxyMode = strings.ToLower(v)
+		normalized := strings.ToLower(v)
+		s.ProxyMode = normalized
+		s.Mode = normalized
+	}
+	if v := os.Getenv("CFWARP_MODE"); v != "" {
+		s.Mode = strings.ToLower(v)
 	}
 	if v := os.Getenv("CFWARP_PROXY_USERNAME"); v != "" {
 		s.ProxyUsername = v
@@ -122,6 +156,12 @@ func applyOverrides(s *state.Settings, o Overrides) {
 	if o.Backend != nil {
 		s.Backend = *o.Backend
 	}
+	if o.RuntimeFamily != nil {
+		s.RuntimeFamily = strings.ToLower(*o.RuntimeFamily)
+	}
+	if o.Transport != nil {
+		s.Transport = strings.ToLower(*o.Transport)
+	}
 	if o.ListenHost != nil {
 		s.ListenHost = *o.ListenHost
 	}
@@ -129,7 +169,12 @@ func applyOverrides(s *state.Settings, o Overrides) {
 		s.ListenPort = *o.ListenPort
 	}
 	if o.ProxyMode != nil {
-		s.ProxyMode = strings.ToLower(*o.ProxyMode)
+		normalized := strings.ToLower(*o.ProxyMode)
+		s.ProxyMode = normalized
+		s.Mode = normalized
+	}
+	if o.Mode != nil {
+		s.Mode = strings.ToLower(*o.Mode)
 	}
 	if o.ProxyUsername != nil {
 		s.ProxyUsername = *o.ProxyUsername
@@ -144,5 +189,3 @@ func applyOverrides(s *state.Settings, o Overrides) {
 		s.LogLevel = strings.ToLower(*o.LogLevel)
 	}
 }
-
-

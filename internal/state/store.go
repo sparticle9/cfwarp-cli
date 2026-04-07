@@ -62,6 +62,7 @@ func SaveAccount(d Dirs, acc AccountState, force bool) error {
 			return fmt.Errorf("account state already exists at %s; use --force to overwrite", d.AccountFile())
 		}
 	}
+	acc.Normalize()
 	if err := os.MkdirAll(d.Config, 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -72,11 +73,17 @@ func SaveAccount(d Dirs, acc AccountState, force bool) error {
 // Returns ErrNotFound if no account has been registered yet.
 func LoadAccount(d Dirs) (AccountState, error) {
 	var acc AccountState
-	return acc, readJSON(d.AccountFile(), &acc)
+	err := readJSON(d.AccountFile(), &acc)
+	if err != nil {
+		return acc, err
+	}
+	acc.Normalize()
+	return acc, nil
 }
 
 // SaveSettings writes s to settings.json in d.Config.
 func SaveSettings(d Dirs, s Settings) error {
+	s.Normalize()
 	if err := os.MkdirAll(d.Config, 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -91,7 +98,11 @@ func LoadSettings(d Dirs) (Settings, error) {
 	if errors.Is(err, ErrNotFound) {
 		return s, ErrNotFound
 	}
-	return s, err
+	if err != nil {
+		return s, err
+	}
+	s.Normalize()
+	return s, nil
 }
 
 // SaveRuntime writes rt to runtime.json in d.Runtime.

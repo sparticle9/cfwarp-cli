@@ -9,7 +9,7 @@ import (
 )
 
 func validSettings() state.Settings {
-	return state.DefaultSettings() // backend=singbox-wireguard, port=1080, mode=socks5, level=info
+	return state.DefaultSettings()
 }
 
 // --- Validate ---
@@ -20,21 +20,49 @@ func TestValidate_Valid(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidBackend(t *testing.T) {
+func TestValidate_InvalidRuntimeFamily(t *testing.T) {
 	s := validSettings()
-	s.Backend = "kernel-wireguard" // not yet supported
+	s.RuntimeFamily = "daemonless"
 	err := settings.Validate(s)
-	if err == nil || !strings.Contains(err.Error(), "backend") {
-		t.Errorf("expected backend error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "runtime_family") {
+		t.Errorf("expected runtime_family error, got: %v", err)
 	}
 }
 
-func TestValidate_InvalidProxyMode(t *testing.T) {
+func TestValidate_InvalidTransport(t *testing.T) {
 	s := validSettings()
-	s.ProxyMode = "ftp"
+	s.Transport = "quic"
 	err := settings.Validate(s)
-	if err == nil || !strings.Contains(err.Error(), "proxy_mode") {
-		t.Errorf("expected proxy_mode error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "transport") {
+		t.Errorf("expected transport error, got: %v", err)
+	}
+}
+
+func TestValidate_InvalidMode(t *testing.T) {
+	s := validSettings()
+	s.Mode = "ftp"
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "mode") {
+		t.Errorf("expected mode error, got: %v", err)
+	}
+}
+
+func TestValidate_InvalidRuntimeCombination_LegacyMasque(t *testing.T) {
+	s := validSettings()
+	s.Transport = state.TransportMasque
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "runtime_family") && !strings.Contains(err.Error(), "transport") {
+		t.Errorf("expected runtime/transport combination error, got: %v", err)
+	}
+}
+
+func TestValidate_RuntimeFamilyNativeReserved(t *testing.T) {
+	s := validSettings()
+	s.RuntimeFamily = state.RuntimeFamilyNative
+	s.Transport = state.TransportMasque
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("expected reserved native runtime error, got: %v", err)
 	}
 }
 
