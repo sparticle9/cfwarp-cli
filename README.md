@@ -72,6 +72,7 @@ This matters because the fastest raw tunnel is not always the best fit for real 
 ## Documents
 
 - `docs/background.md` — research notes and implementation background
+- `docs/benchmark-package.md` — entry point for sharing the benchmark work internally
 - `docs/benchmark-mechanism.md` — benchmark harness design, phases, and result semantics
 - `docs/benchmark-report-case.md` — interpretation of the latest benchmark set for the intended workload mix
 - `docs/specs/001-minimal-wireguard-proxy/requirements.md` — MVP requirements
