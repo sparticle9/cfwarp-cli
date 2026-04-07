@@ -220,7 +220,7 @@
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
-          echo "variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
+          echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
 
     - name: Run alpine variant measurements
@@ -289,120 +289,7 @@
         msg: "bench_ts not set. Pass -e bench_ts=<timestamp> or run bench plays first."
       when: bench_ts is not defined
 
-    - name: Generate markdown report on tyo
-      ansible.builtin.shell: |
-        D=/tmp/bench-{{ bench_ts }}
-        {
-        cat <<HEADER
-        # cfwarp-cli Benchmark Report
-
-        | Key | Value |
-        |-----|-------|
-        | Timestamp | {{ bench_ts }} |
-        | Proxy host | {{ inventory_hostname }} |
-        | Bench server | {{ groups['bench_server'][0] }} |
-        | Alpine image | {{ cfwarp_image_alpine }} |
-        | Debian image | {{ cfwarp_image_debian }} |
-        | Container CPU | {{ container_cpus }} vCPU |
-        | Container memory | {{ container_memory }} |
-        | iperf3 | {{ iperf3_parallel }} streams × {{ iperf3_duration }}s |
-        | Latency probes | {{ runs_lat }} pings per variant |
-        | Throughput probes | {{ runs_thr }} runs per variant |
-        | HTTP file size | {{ nginx_file_mb }} MB |
-
-        ---
-
-        ## Latency — ping RTT through WireGuard tunnel (ms)
-
-        HEADER
-
-        awk -F, '
-        NR>1 && $3!="ERR" {
-          v=$1; t=$3+0; cnt[v]++; n=cnt[v]; vals[v,n]=t; sum[v]+=t
-        }
-        END {
-          printf "| Variant | p50 | p95 | p99 | Mean | n |\n"
-          printf "|---------|----:|----:|----:|-----:|--:|\n"
-          for (v in cnt) {
-            n=cnt[v]
-            for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v,i]>vals[v,j]) { tmp=vals[v,i]; vals[v,i]=vals[v,j]; vals[v,j]=tmp }
-            printf "| %-8s | %.1f | %.1f | %.1f | %.1f | %d |\n",
-              v, vals[v,int(n*0.50)+1], vals[v,int(n*0.95)+1], vals[v,int(n*0.99)+1], sum[v]/n, n
-          }
-        }' $D/latency.csv
-
-        printf "\n---\n\n## Throughput — iperf3 raw WireGuard (Mbit/s)\n\n"
-        awk -F, '
-        NR>1 && $3!="ERR" && $3>0 {
-          v=$1; b=$3+0; cnt[v]++; n=cnt[v]; vals[v,n]=b; sum[v]+=b
-          if (b>mx[v]) mx[v]=b
-        }
-        END {
-          printf "| Variant | Median | p95 | Max | Mean | n |\n"
-          printf "|---------|-------:|----:|----:|-----:|--:|\n"
-          for (v in cnt) {
-            n=cnt[v]
-            for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v,i]>vals[v,j]) { tmp=vals[v,i]; vals[v,i]=vals[v,j]; vals[v,j]=tmp }
-            printf "| %-8s | %.1f | %.1f | %.1f | %.1f | %d |\n",
-              v, vals[v,int(n*0.50)+1]/1e6, vals[v,int(n*0.95)+1]/1e6,
-              mx[v]/1e6, (sum[v]/n)/1e6, n
-          }
-        }' $D/throughput_iperf3.csv
-
-        printf "\n---\n\n## Throughput — HTTP download (MB/s)\n\n"
-        awk -F, '
-        NR>1 && $5!="ERR" && $5>0 {
-          v=$1; s=$5+0; cnt[v]++; n=cnt[v]; vals[v,n]=s; sum[v]+=s
-        }
-        END {
-          printf "| Variant | Median | Mean | n |\n"
-          printf "|---------|-------:|-----:|--:|\n"
-          for (v in cnt) {
-            n=cnt[v]
-            for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v,i]>vals[v,j]) { tmp=vals[v,i]; vals[v,i]=vals[v,j]; vals[v,j]=tmp }
-            printf "| %-8s | %.2f | %.2f | %d |\n",
-              v, vals[v,int(n*0.50)+1]/1024/1024, (sum[v]/n)/1024/1024, n
-          }
-        }' $D/throughput_http.csv
-
-        printf "\n---\n\n## Resource Usage (docker stats)\n\n"
-        printf "| Variant | Phase | CPU%% | Mem Used | Mem Limit | Net RX | Net TX |\n"
-        printf "|---------|-------|------:|---------:|----------:|-------:|-------:|\n"
-        awk -F, 'NR>1 {
-          printf "| %-8s | %-12s | %-6s | %-10s | %-10s | %-8s | %-8s |\n",
-            $1,$2,$3,$4,$5,$6,$7
-        }' $D/container_stats.csv
-
-        printf "\n---\n\n## Efficiency — Mbit/s per CPU%%\n\n"
-        printf "| Variant | Mbit/s (median) | CPU%% (throughput) | Mbit/s / CPU%% |\n"
-        printf "|---------|----------------:|------------------:|---------------:|\n"
-        awk -F, '
-        FILENAME ~ /iperf/ && NR>1 && $3!="ERR" && $3>0 {
-          v=$1; b=$3+0; icnt[v]++; ivals[v,icnt[v]]=b
-        }
-        FILENAME ~ /stats/ && NR>1 && $2=="throughput" {
-          v=$1; c=$3; sub(/%/,"",c); cpu[v]=c+0
-        }
-        END {
-          for (v in icnt) {
-            n=icnt[v]
-            for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (ivals[v,i]>ivals[v,j]) { tmp=ivals[v,i]; ivals[v,i]=ivals[v,j]; ivals[v,j]=tmp }
-            med=ivals[v,int(n*0.50)+1]/1e6
-            c=cpu[v]; eff=(c>0)?med/c:0
-            printf "| %-8s | %15.1f | %17.1f | %14.2f |\n", v, med, c, eff
-          }
-        }' $D/throughput_iperf3.csv $D/container_stats.csv
-
-        printf "\n---\n\n*Generated by ansible/bench.yml — cfwarp-cli*\n"
-        } > $D/report.md && echo "OK: $D/report.md"
-      register: _report
-      changed_when: false
-
-    - name: Fetch results to localhost
+    - name: Fetch raw result CSVs to localhost
       ansible.builtin.fetch:
         src: "/tmp/bench-{{ bench_ts }}/{{ item }}"
         dest: "{{ playbook_dir }}/../bench-results/{{ item | regex_replace('(.*)\\.(.+)', '\\1_' + bench_ts + '.\\2') }}"
@@ -412,10 +299,47 @@
         - throughput_iperf3.csv
         - throughput_http.csv
         - container_stats.csv
-        - report.md
 
-    - name: Print report
-      ansible.builtin.shell: cat /tmp/bench-{{ bench_ts }}/report.md
+    - name: Generate markdown + JSON report locally with Python analyzer
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/../scripts/analyze_bench.py"
+          - --results-dir
+          - "{{ playbook_dir }}/../bench-results"
+          - --timestamp
+          - "{{ bench_ts }}"
+          - --proxy-host
+          - "{{ inventory_hostname }}"
+          - --bench-server
+          - "{{ groups['bench_server'][0] }}"
+          - --alpine-image
+          - "{{ cfwarp_image_alpine }}"
+          - --debian-image
+          - "{{ cfwarp_image_debian }}"
+          - --container-cpus
+          - "{{ container_cpus }}"
+          - --container-memory
+          - "{{ container_memory }}"
+          - --iperf3-duration
+          - "{{ iperf3_duration | string }}"
+          - --iperf3-parallel
+          - "{{ iperf3_parallel | string }}"
+          - --latency-runs
+          - "{{ runs_lat | string }}"
+          - --throughput-runs
+          - "{{ runs_thr | string }}"
+          - --http-file-mb
+          - "{{ nginx_file_mb | string }}"
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Print generated report
+      ansible.builtin.command:
+        argv:
+          - cat
+          - "{{ playbook_dir }}/../bench-results/report_{{ bench_ts }}.md"
+      delegate_to: localhost
       register: _rpt
       changed_when: false
 

@@ -48,104 +48,154 @@
   failed_when: false
 
 # ── Latency ───────────────────────────────────────────────────────────────────
-- name: "[{{ variant.name }}] Latency — {{ runs_lat }} pings through WireGuard"
-  ansible.builtin.shell: |
-    docker run --rm \
-      --network container:cfwarp-bench-{{ variant.name }} \
-      alpine sh -c '
-        for i in $(seq 1 {{ runs_lat }}); do
-          rtt=$(ping -c1 -W5 {{ bench_ip }} 2>/dev/null \
-                | grep "time=" | sed "s/.*time=//;s/ ms//")
-          echo "{{ variant.name }},${i},${rtt:-ERR}"
-        done
-      '
-  register: _lat
-  changed_when: false
+- name: "[{{ variant.name }}] Latency phase"
+  block:
+    - name: "[{{ variant.name }}] Start latency docker stats sampler"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-latency-sampler.pid
+        rm -f "$pidfile"
+        nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" latency cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
+        echo $! > "$pidfile"
+      changed_when: false
 
-- name: "[{{ variant.name }}] Append latency rows to CSV"
-  ansible.builtin.shell: |
-    printf '%s\n' {{ _lat.stdout_lines | map('quote') | join(' ') }} \
-      >> /tmp/bench-{{ bench_ts }}/latency.csv
-  changed_when: false
+    - name: "[{{ variant.name }}] Latency — {{ runs_lat }} pings through WireGuard"
+      ansible.builtin.shell: |
+        docker run --rm \
+          --network container:cfwarp-bench-{{ variant.name }} \
+          alpine sh -c '
+            for i in $(seq 1 {{ runs_lat }}); do
+              rtt=$(ping -c1 -W5 {{ bench_ip }} 2>/dev/null \
+                    | grep "time=" | sed "s/.*time=//;s/ ms//")
+              echo "{{ variant.name }},${i},${rtt:-ERR}"
+            done
+          '
+      register: _lat
+      changed_when: false
 
-- name: "[{{ variant.name }}] Stats snapshot — latency phase"
-  ansible.builtin.shell: >-
-    /tmp/docker_stats.sh
-    "{{ variant.name }}" latency cfwarp-bench-{{ variant.name }}
-    /tmp/bench-{{ bench_ts }}/container_stats.csv
-  changed_when: false
-  failed_when: false
+    - name: "[{{ variant.name }}] Append latency rows to CSV"
+      ansible.builtin.shell: |
+        printf '%s\n' {{ _lat.stdout_lines | map('quote') | join(' ') }} \
+          >> /tmp/bench-{{ bench_ts }}/latency.csv
+      changed_when: false
+  always:
+    - name: "[{{ variant.name }}] Stop latency docker stats sampler"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-latency-sampler.pid
+        if [ -f "$pidfile" ]; then
+          pid=$(cat "$pidfile")
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+      changed_when: false
+      failed_when: false
 
 # ── iperf3 throughput ─────────────────────────────────────────────────────────
-- name: "[{{ variant.name }}] iperf3 throughput run {{ _run_n }}/{{ runs_thr }}"
-  ansible.builtin.shell: |
-    docker run --rm \
-      --network container:cfwarp-bench-{{ variant.name }} \
-      networkstatic/iperf3 \
-      -c {{ bench_ip }} -p {{ iperf3_port }} \
-      -t {{ iperf3_duration }} -P {{ iperf3_parallel }} \
-      --json 2>/dev/null \
-    | awk '
-        /"sum_received"/{f=1}
-        f && /"bits_per_second"/{
-          gsub(/[^0-9.]/,"",$2)
-          print "{{ variant.name }}," NR "," $2; exit
-        }
-      ' | sed "s/{{ variant.name }},[0-9]*/{{ variant.name }},{{ _run_n }}/"
-  register: _iperf3
-  loop: "{{ range(1, runs_thr | int + 1) | list }}"
-  loop_control:
-    loop_var: _run_n
-    label: "run {{ _run_n }}/{{ runs_thr }}"
-  changed_when: false
-  failed_when: false
+- name: "[{{ variant.name }}] iperf3 throughput phase"
+  block:
+    - name: "[{{ variant.name }}] Start iperf3 docker stats sampler"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-iperf3-sampler.pid
+        rm -f "$pidfile"
+        nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" iperf3 cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
+        echo $! > "$pidfile"
+      changed_when: false
 
-- name: "[{{ variant.name }}] Append iperf3 rows to CSV"
-  ansible.builtin.shell: |
-    {% for r in _iperf3.results %}
-    if [ -n "{{ r.stdout | default('') }}" ]; then
-      echo "{{ r.stdout }}" >> /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
-    else
-      echo "{{ variant.name }},{{ r._run_n }},ERR" >> /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
-    fi
-    {% endfor %}
-  changed_when: false
+    - name: "[{{ variant.name }}] iperf3 throughput run {{ _run_n }}/{{ runs_thr }}"
+      ansible.builtin.shell: |
+        docker run --rm \
+          --network container:cfwarp-bench-{{ variant.name }} \
+          networkstatic/iperf3 \
+          -c {{ bench_ip }} -p {{ iperf3_port }} \
+          -t {{ iperf3_duration }} -P {{ iperf3_parallel }} \
+          --json 2>/dev/null \
+        | awk '
+            /"sum_received"/{f=1}
+            f && /"bits_per_second"/{
+              gsub(/[^0-9.]/,"",$2)
+              print "{{ variant.name }}," NR "," $2; exit
+            }
+          ' | sed "s/{{ variant.name }},[0-9]*/{{ variant.name }},{{ _run_n }}/"
+      register: _iperf3
+      loop: "{{ range(1, runs_thr | int + 1) | list }}"
+      loop_control:
+        loop_var: _run_n
+        label: "run {{ _run_n }}/{{ runs_thr }}"
+      changed_when: false
+      failed_when: false
 
-- name: "[{{ variant.name }}] Stats snapshot — throughput phase"
-  ansible.builtin.shell: >-
-    /tmp/docker_stats.sh
-    "{{ variant.name }}" throughput cfwarp-bench-{{ variant.name }}
-    /tmp/bench-{{ bench_ts }}/container_stats.csv
-  changed_when: false
-  failed_when: false
+    - name: "[{{ variant.name }}] Append iperf3 rows to CSV"
+      ansible.builtin.shell: |
+        {% for r in _iperf3.results %}
+        if [ -n "{{ r.stdout | default('') }}" ]; then
+          echo "{{ r.stdout }}" >> /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
+        else
+          echo "{{ variant.name }},{{ r._run_n }},ERR" >> /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
+        fi
+        {% endfor %}
+      changed_when: false
+  always:
+    - name: "[{{ variant.name }}] Stop iperf3 docker stats sampler"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-iperf3-sampler.pid
+        if [ -f "$pidfile" ]; then
+          pid=$(cat "$pidfile")
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+      changed_when: false
+      failed_when: false
 
 # ── HTTP bulk download ────────────────────────────────────────────────────────
-- name: "[{{ variant.name }}] HTTP download run {{ _run_n }}/{{ runs_thr }}"
-  ansible.builtin.shell: |
-    docker run --rm \
-      --network container:cfwarp-bench-{{ variant.name }} \
-      curlimages/curl \
-      -sS -o /dev/null --max-time 300 \
-      --write-out "{{ variant.name }},{{ _run_n }},%{time_total},%{size_download},%{speed_download},%{http_code}" \
-      "http://{{ bench_ip }}:{{ nginx_port }}/data.bin"
-  register: _http
-  loop: "{{ range(1, runs_thr | int + 1) | list }}"
-  loop_control:
-    loop_var: _run_n
-    label: "run {{ _run_n }}/{{ runs_thr }}"
-  changed_when: false
-  failed_when: false
+- name: "[{{ variant.name }}] HTTP throughput phase"
+  block:
+    - name: "[{{ variant.name }}] Start HTTP docker stats sampler"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-http-sampler.pid
+        rm -f "$pidfile"
+        nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" http cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
+        echo $! > "$pidfile"
+      changed_when: false
 
-- name: "[{{ variant.name }}] Append HTTP rows to CSV"
-  ansible.builtin.shell: |
-    {% for r in _http.results %}
-    if [ -n "{{ r.stdout | default('') }}" ]; then
-      echo "{{ r.stdout }}" >> /tmp/bench-{{ bench_ts }}/throughput_http.csv
-    else
-      echo "{{ variant.name }},{{ r._run_n }},ERR,0,0,0" >> /tmp/bench-{{ bench_ts }}/throughput_http.csv
-    fi
-    {% endfor %}
-  changed_when: false
+    - name: "[{{ variant.name }}] HTTP download run {{ _run_n }}/{{ runs_thr }}"
+      ansible.builtin.shell: |
+        docker run --rm \
+          --network container:cfwarp-bench-{{ variant.name }} \
+          curlimages/curl \
+          -sS -o /dev/null --max-time 300 \
+          --write-out "{{ variant.name }},{{ _run_n }},%{time_total},%{size_download},%{speed_download},%{http_code}" \
+          "http://{{ bench_ip }}:{{ nginx_port }}/data.bin"
+      register: _http
+      loop: "{{ range(1, runs_thr | int + 1) | list }}"
+      loop_control:
+        loop_var: _run_n
+        label: "run {{ _run_n }}/{{ runs_thr }}"
+      changed_when: false
+      failed_when: false
+
+    - name: "[{{ variant.name }}] Append HTTP rows to CSV"
+      ansible.builtin.shell: |
+        {% for r in _http.results %}
+        if [ -n "{{ r.stdout | default('') }}" ]; then
+          echo "{{ r.stdout }}" >> /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        else
+          echo "{{ variant.name }},{{ r._run_n }},ERR,0,0,0" >> /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        fi
+        {% endfor %}
+      changed_when: false
+  always:
+    - name: "[{{ variant.name }}] Stop HTTP docker stats sampler"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-http-sampler.pid
+        if [ -f "$pidfile" ]; then
+          pid=$(cat "$pidfile")
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+      changed_when: false
+      failed_when: false
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 - name: "[{{ variant.name }}] Stop cfwarp container"
