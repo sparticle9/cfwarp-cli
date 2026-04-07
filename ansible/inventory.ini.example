@@ -4,19 +4,22 @@
 # ansible_host / ansible_user / ansible_port here if SSH config handles them.
 # Add ansible_user= only if your SSH config does not set a User directive.
 
-# ── Production WARP proxy hosts ───────────────────────────────────────────────
+# ── WARP proxy hosts under test ───────────────────────────────────────────────
+# Define one or more hosts that will run the tunnel/proxy containers being compared.
+# Host aliases should match entries in your ~/.ssh/config.
 [warp]
-tyo        # e.g. Tokyo VPS — name must match your ~/.ssh/config Host entry
-# sgp
-# fra
+proxy-host-1
+# proxy-host-2
 
 [warp:vars]
 ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
 
 # ── Benchmark target server ───────────────────────────────────────────────────
-# One host that acts as iperf3 + nginx server during bench.yml runs.
+# Define exactly one host that serves as the remote benchmark target. bench.yml
+# will run iperf3 + static HTTP + API-like HTTP endpoints on this machine.
+# Host aliases should match entries in your ~/.ssh/config.
 [bench_server]
-laxhd      # e.g. Los Angeles VPS — name must match your ~/.ssh/config Host entry
+bench-target-1
 
 [bench_server:vars]
 ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'

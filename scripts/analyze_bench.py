@@ -192,9 +192,20 @@ def collect_http(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
 
 def collect_k6(rows: list[dict[str, str]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
     grouped: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    legacy = {
+        "small": {"family": "metadata", "method": "GET", "body_bytes": 0},
+        "medium": {"family": "llm_sync", "method": "POST", "body_bytes": 8192},
+        "upload": {"family": "upload", "method": "POST", "body_bytes": 262144},
+        "stream": {"family": "stream", "method": "GET", "body_bytes": 0},
+    }
     for row in rows:
-        grouped[row.get("variant", "unknown")][row.get("profile", "unknown")].append(
+        profile = row.get("profile", "unknown")
+        defaults = legacy.get(profile, {})
+        grouped[row.get("variant", "unknown")][profile].append(
             {
+                "family": row.get("family") or defaults.get("family", "unknown"),
+                "method": row.get("method") or defaults.get("method", "unknown"),
+                "body_bytes": to_float(row.get("body_bytes")) if row.get("body_bytes") not in (None, "") else defaults.get("body_bytes"),
                 "vus": to_float(row.get("vus")),
                 "duration_s": to_float(row.get("duration_s")),
                 "http_reqs": to_float(row.get("http_reqs")),
@@ -339,7 +350,8 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
                 for variant, profiles in k6.items()
             }, mode="min")
             if best:
-                lines.append(f"  - **{profile}**: {best[0]} at **{best[1]:.1f} ms** p95")
+                family = next((rows[0]["family"] for rows in [k6[v].get(profile, []) for v in k6] if rows), "unknown")
+                lines.append(f"  - **{profile}** ({family}): {best[0]} at **{best[1]:.1f} ms** p95")
     lines.append("- CPU and memory below are measured from the **benchmarked tunnel container cgroup only**, not from helper load-generator containers.")
     lines.append("")
     lines.append("---")
@@ -406,8 +418,8 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
 
     lines.append("## API-like workload — k6 summary")
     lines.append("")
-    lines.append("| Variant | Profile | VUs | RPS | Error Rate | p50 ms | p95 ms | p99 ms | Max ms | Waiting p95 | Connect p95 | Iter p95 | CPU Mean % | CPU Max % | Mem Peak |")
-    lines.append("|---------|---------|---:|----:|-----------:|-------:|-------:|-------:|------:|------------:|------------:|---------:|-----------:|----------:|---------:|")
+    lines.append("| Variant | Family | Profile | Method | Body | VUs | RPS | Error Rate | p50 ms | p95 ms | p99 ms | Max ms | Waiting p95 | Connect p95 | Iter p95 | CPU Mean % | CPU Max % | Mem Peak |")
+    lines.append("|---------|--------|---------|--------|-----:|---:|----:|-----------:|-------:|-------:|-------:|------:|------------:|------------:|---------:|-----------:|----------:|---------:|")
     for variant in sorted(k6):
         for profile in sorted(k6[variant]):
             rows = k6[variant][profile]
@@ -421,9 +433,12 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
             conns = [r['connect_p95_ms'] for r in rows if r['connect_p95_ms'] is not None]
             iters = [r['iteration_p95_ms'] for r in rows if r['iteration_p95_ms'] is not None]
             vus = rows[0]['vus'] if rows else None
+            family = rows[0]['family'] if rows else 'unknown'
+            method = rows[0]['method'] if rows else 'unknown'
+            body = rows[0]['body_bytes'] if rows else float('nan')
             phase_stats = stats.get((variant, f"k6-{profile}"), {})
             lines.append(
-                f"| {variant:<8} | {profile:<7} | {safe_fmt(vus, digits=0)} | {safe_fmt(mean(rps))} | {safe_fmt(mean(err), digits=3)} | {safe_fmt(mean(p50s))} | {safe_fmt(mean(p95s))} | {safe_fmt(mean(p99s))} | {safe_fmt(mean(maxs))} | {safe_fmt(mean(waits))} | {safe_fmt(mean(conns))} | {safe_fmt(mean(iters))} | {safe_fmt(phase_stats.get('cpu_mean', float('nan')), digits=2)} | {safe_fmt(phase_stats.get('cpu_max', float('nan')), digits=2)} | {human_bytes(phase_stats.get('mem_max_bytes', float('nan')))} |"
+                f"| {variant:<8} | {family:<8} | {profile:<10} | {method:<6} | {safe_fmt(body, digits=0)} | {safe_fmt(vus, digits=0)} | {safe_fmt(mean(rps))} | {safe_fmt(mean(err), digits=3)} | {safe_fmt(mean(p50s))} | {safe_fmt(mean(p95s))} | {safe_fmt(mean(p99s))} | {safe_fmt(mean(maxs))} | {safe_fmt(mean(waits))} | {safe_fmt(mean(conns))} | {safe_fmt(mean(iters))} | {safe_fmt(phase_stats.get('cpu_mean', float('nan')), digits=2)} | {safe_fmt(phase_stats.get('cpu_max', float('nan')), digits=2)} | {human_bytes(phase_stats.get('mem_max_bytes', float('nan')))} |"
             )
     lines.append("")
     lines.append("---")
@@ -447,7 +462,7 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
         )
     lines.append("")
     lines.append("- **Raw path** = latency + iperf3 + large HTTP download phases.")
-    lines.append("- **API suite** = k6 small/medium/upload/stream phases.")
+    lines.append("- **API suite** = metadata + llm_sync + upload + stream k6 phases.")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -526,18 +541,23 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
         lines.append("")
         lines.append("## Cross-variant summary")
         lines.append("")
-        lines.append("| Variant | Mean latency (ms) | iperf3 upload median (Mbit/s) | iperf3 download median (Mbit/s) | HTTP mean (MB/s) | k6 small p95 (ms) | iperf3 Mem Peak | HTTP Mem Peak |")
-        lines.append("|---------|------------------:|------------------------------:|--------------------------------:|-----------------:|------------------:|----------------:|--------------:|")
+        lines.append("| Variant | Mean latency (ms) | iperf3 upload median (Mbit/s) | iperf3 download median (Mbit/s) | HTTP mean (MB/s) | metadata p95 (ms) | llm_sync p95 (ms) | upload p95 (ms) | stream p95 (ms) | iperf3 Mem Peak | HTTP Mem Peak |")
+        lines.append("|---------|------------------:|------------------------------:|--------------------------------:|-----------------:|------------------:|-----------------:|---------------:|---------------:|----------------:|--------------:|")
         for variant in shared:
             lat_mean = mean(latency[variant]["success"]) if latency[variant]["success"] else float("nan")
             ip_up = percentile(iperf3[variant]["upload"], 0.50) / 1e6 if iperf3[variant]["upload"] else float("nan")
             ip_down = percentile(iperf3[variant]["download"], 0.50) / 1e6 if iperf3[variant]["download"] else float("nan")
             http_mean = mean(http[variant]["speed_bps"]) / (1024**2) if http[variant]["speed_bps"] else float("nan")
-            k6_small = mean([r['p95_ms'] for r in k6.get(variant, {}).get('small', []) if r['p95_ms'] is not None])
+            def fam_p95(fam: str) -> float:
+                vals = []
+                for _profile, rows in k6.get(variant, {}).items():
+                    if rows and rows[0]['family'] == fam:
+                        vals.extend([r['p95_ms'] for r in rows if r['p95_ms'] is not None])
+                return mean(vals) if vals else float('nan')
             ip_mem_peak = stats.get((variant, "iperf3"), {}).get("mem_max_bytes", float("nan"))
             http_mem_peak = stats.get((variant, "http"), {}).get("mem_max_bytes", float("nan"))
             lines.append(
-                f"| {variant:<8} | {safe_fmt(lat_mean)} | {safe_fmt(ip_up)} | {safe_fmt(ip_down)} | {safe_fmt(http_mean, digits=2)} | {safe_fmt(k6_small)} | {human_bytes(ip_mem_peak)} | {human_bytes(http_mem_peak)} |"
+                f"| {variant:<8} | {safe_fmt(lat_mean)} | {safe_fmt(ip_up)} | {safe_fmt(ip_down)} | {safe_fmt(http_mean, digits=2)} | {safe_fmt(fam_p95('metadata'))} | {safe_fmt(fam_p95('llm_sync'))} | {safe_fmt(fam_p95('upload'))} | {safe_fmt(fam_p95('stream'))} | {human_bytes(ip_mem_peak)} | {human_bytes(http_mem_peak)} |"
             )
         lines.append("")
 

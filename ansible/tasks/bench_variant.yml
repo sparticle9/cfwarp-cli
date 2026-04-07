@@ -5,6 +5,12 @@
 #                  runs_lat, runs_thr, iperf3_duration, iperf3_parallel,
 #                  container_cpus, container_memory, tunnel_wait_sec, state_volume
 
+- name: "[{{ variant.name }}] Clean stale sampler processes from previous interrupted runs"
+  ansible.builtin.shell: |
+    ps -ef | grep docker_stats.sh | grep 'cfwarp-bench-{{ variant.name }}' | grep -v grep | awk '{print $2}' | xargs -r kill || true
+    find /tmp -maxdepth 2 -type f \( -name '{{ variant.name }}-*-sampler.pid' -o -name 'docker-stats-cfwarp-bench-{{ variant.name }}*' \) -delete 2>/dev/null || true
+  changed_when: false
+
 - name: "[{{ variant.name }}] Remove previous bench container if any"
   ansible.builtin.shell: docker rm -f cfwarp-bench-{{ variant.name }} 2>/dev/null || true
   changed_when: false
@@ -284,7 +290,7 @@
   loop: "{{ k6_profiles }}"
   loop_control:
     loop_var: k6_profile
-    label: "{{ k6_profile.name }}"
+    label: "{{ k6_profile.profile }}"
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 - name: "[{{ variant.name }}] Stop cfwarp container"

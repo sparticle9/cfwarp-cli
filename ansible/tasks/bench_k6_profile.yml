@@ -1,38 +1,70 @@
 ---
 # Expects: variant.name, bench_ts, k6_profile, bench_ip, api_port
 
-- name: "[{{ variant.name }}][{{ k6_profile.name }}] Start k6 docker stats sampler"
+- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Start k6 docker stats sampler"
   ansible.builtin.shell: |
-    pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.name }}-sampler.pid
-    statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-k6-{{ k6_profile.name }}.state
+    pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.profile }}-sampler.pid
+    statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-k6-{{ k6_profile.profile }}.state
     rm -f "$pidfile" "$statefile"
-    nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" "k6-{{ k6_profile.name }}" cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
+    nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" "k6-{{ k6_profile.profile }}" cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
     echo $! > "$pidfile"
   changed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.name }}] Run k6 workload"
-  ansible.builtin.shell: |
-    docker run --rm \
-      --user 0:0 \
-      --network container:cfwarp-bench-{{ variant.name }} \
-      -v /tmp/k6_api.js:/scripts/k6_api.js:ro \
-      -v /tmp/bench-{{ bench_ts }}:/results \
-      -e PROFILE='{{ k6_profile.name }}' \
-      -e 'TARGET_URL=http://{{ bench_ip }}:{{ api_port }}{{ k6_profile.path }}' \
-      -e METHOD='{{ k6_profile.method }}' \
-      -e BODY_BYTES='{{ k6_profile.body_bytes | string }}' \
-      -e VUS='{{ k6_profile.vus | string }}' \
-      -e DURATION='{{ k6_profile.duration }}' \
-      grafana/k6:latest run --summary-export /results/k6_{{ variant.name }}_{{ k6_profile.name }}.json /scripts/k6_api.js
-  register: _k6_run
-  changed_when: false
+- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Run k6 workload"
+  block:
+    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Execute k6"
+      ansible.builtin.shell: |
+        timeout 120s docker run --rm \
+          --user 0:0 \
+          --network container:cfwarp-bench-{{ variant.name }} \
+          -v /tmp/k6_api.js:/scripts/k6_api.js:ro \
+          -v /tmp/bench-{{ bench_ts }}:/results \
+          -e PROFILE='{{ k6_profile.profile }}' \
+          -e FAMILY='{{ k6_profile.family }}' \
+          -e 'TARGET_URL=http://{{ bench_ip }}:{{ api_port }}{{ k6_profile.path }}' \
+          -e METHOD='{{ k6_profile.method }}' \
+          -e BODY_BYTES='{{ k6_profile.body_bytes | string }}' \
+          -e VUS='{{ k6_profile.vus | string }}' \
+          -e DURATION='{{ k6_profile.duration }}' \
+          grafana/k6:latest run --summary-export /results/k6_{{ variant.name }}_{{ k6_profile.profile }}.json /scripts/k6_api.js
+      register: _k6_run
+      changed_when: false
+      failed_when: _k6_run.rc != 0
+      async: 180
+      poll: 5
+  rescue:
+    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Dump container logs after k6 failure"
+      ansible.builtin.shell: docker logs --tail 200 cfwarp-bench-{{ variant.name }} 2>&1 || true
+      register: _k6_logs
+      changed_when: false
+      failed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.name }}] Append k6 summary row"
+    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Show k6 failure logs"
+      ansible.builtin.debug:
+        msg: "{{ _k6_logs.stdout }}"
+
+    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Stop sampler after k6 failure"
+      ansible.builtin.shell: |
+        pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.profile }}-sampler.pid
+        if [ -f "$pidfile" ]; then
+          pid=$(cat "$pidfile")
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          rm -f "$pidfile"
+        fi
+      changed_when: false
+      failed_when: false
+
+    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Fail k6 phase"
+      ansible.builtin.fail:
+        msg: "k6 workload failed for {{ variant.name }} / {{ k6_profile.profile }}"
+
+- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Append k6 summary row"
   ansible.builtin.shell: |
     python3 - <<'PY'
     import json
     from pathlib import Path
-    p = Path('/tmp/bench-{{ bench_ts }}/k6_{{ variant.name }}_{{ k6_profile.name }}.json')
+    p = Path('/tmp/bench-{{ bench_ts }}/k6_{{ variant.name }}_{{ k6_profile.profile }}.json')
     data = json.loads(p.read_text())
     m = data.get('metrics', {})
 
@@ -44,7 +76,10 @@
 
     row = [
         '{{ variant.name }}',
-        '{{ k6_profile.name }}',
+        '{{ k6_profile.family }}',
+        '{{ k6_profile.profile }}',
+        '{{ k6_profile.method }}',
+        '{{ k6_profile.body_bytes }}',
         '{{ k6_profile.vus }}',
         '{{ k6_profile.duration }}'.rstrip('s'),
         str(val('http_reqs', 'count', 0)),
@@ -65,21 +100,21 @@
     PY
   changed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.name }}] Assert k6 error rate acceptable"
+- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Assert k6 error rate acceptable"
   ansible.builtin.shell: |
     python3 - <<'PY'
     import json
     from pathlib import Path
-    p = Path('/tmp/bench-{{ bench_ts }}/k6_{{ variant.name }}_{{ k6_profile.name }}.json')
+    p = Path('/tmp/bench-{{ bench_ts }}/k6_{{ variant.name }}_{{ k6_profile.profile }}.json')
     data = json.loads(p.read_text())
     rate = data.get('metrics', {}).get('http_req_failed', {}).get('value', 1)
     raise SystemExit(0 if float(rate) < 0.01 else 1)
     PY
   changed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.name }}] Stop k6 docker stats sampler"
+- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Stop k6 docker stats sampler"
   ansible.builtin.shell: |
-    pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.name }}-sampler.pid
+    pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.profile }}-sampler.pid
     if [ -f "$pidfile" ]; then
       pid=$(cat "$pidfile")
       kill "$pid" 2>/dev/null || true

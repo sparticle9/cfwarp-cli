@@ -2,19 +2,19 @@
 # bench.yml — Raw WireGuard tunnel A/B benchmark
 #
 # ── Topology ─────────────────────────────────────────────────────────────────
-#   localhost  Ansible controller — orchestrates only
-#   tyo        Proxy host — runs warp variants + load-generator containers
-#   laxhd      Bench target — iperf3-server + nginx + httpbin in Docker
+#   localhost    Ansible controller — orchestrates only
+#   warp hosts   run tunnel/proxy variants + load-generator containers
+#   bench host   runs iperf3 + static HTTP + API-like HTTP endpoints in Docker
 #
 # ── Tags (run stages independently to avoid full restarts) ───────────────────
-#   servers        Play 1: start/reuse iperf3 + nginx + httpbin on laxhd
-#   prepare        Play 2: pull images, register WARP account on tyo
-#   bench-alpine   Play 3a: run measurements for alpine variant only
-#   bench-debian   Play 3b: run measurements for debian variant only
+#   servers         Play 1: start/reuse benchmark target services on bench host
+#   prepare         Play 2: pull published images, prepare reusable state/helpers
+#   bench-alpine    Play 3a: run measurements for alpine variant only
+#   bench-debian    Play 3b: run measurements for debian variant only
 #   bench-microwarp Play 3c: run measurements for original MicroWARP only
-#   bench          Play 3: run all variant measurements
-#   report         Play 4: generate + fetch markdown report
-#   teardown       Play 5: stop laxhd server containers
+#   bench           Play 3: run all variant measurements
+#   report          Play 4: generate + fetch markdown report
+#   teardown        Play 5: stop benchmark target services
 #
 # ── Usage ────────────────────────────────────────────────────────────────────
 #   Full run:
@@ -280,10 +280,14 @@
     nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
     api_port:    "{{ hostvars[groups['bench_server'][0]].get('api_port',    api_port_default  | default('18082')) }}"
     k6_profiles:
-      - { name: small,  method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,      vus: 64, duration: "30s" }
-      - { name: medium, method: POST, path: "/post",              body_bytes: 8192,   vus: 48, duration: "30s" }
-      - { name: upload, method: POST, path: "/post",              body_bytes: 262144, vus: 16, duration: "30s" }
-      - { name: stream, method: GET,  path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "30s" }
+      - { family: metadata, profile: meta-4k, method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,       vus: 128, duration: "25s" }
+      - { family: metadata, profile: meta-8k, method: GET,  path: "/bytes/8192?seed=2", body_bytes: 0,       vus: 96,  duration: "25s" }
+      - { family: llm_sync, profile: llm-8k, method: POST, path: "/post",                body_bytes: 8192,    vus: 48,  duration: "25s" }
+      - { family: llm_sync, profile: llm-32k, method: POST, path: "/post",               body_bytes: 32768,   vus: 24,  duration: "25s" }
+      - { family: upload,   profile: asr-256k, method: POST, path: "/post",              body_bytes: 262144,  vus: 16,  duration: "25s" }
+      - { family: upload,   profile: asr-1m, method: POST, path: "/post",                body_bytes: 1048576, vus: 8,   duration: "25s" }
+      - { family: stream,   profile: sse-2s-32k, method: GET, path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "25s" }
+      - { family: stream,   profile: sse-5s-64k, method: GET, path: "/drip?duration=5&numbytes=65536&delay=0&code=200", body_bytes: 0, vus: 8, duration: "25s" }
     bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
                 lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
                 + \" | awk '/^hostname /{print $2}'\")) }}"
@@ -320,7 +324,7 @@
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
         [ -f /tmp/bench-{{ bench_ts }}/k6_summary.csv ] || \
-          echo "variant,profile,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
+          echo "variant,family,profile,method,body_bytes,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
           echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
@@ -350,10 +354,14 @@
     nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
     api_port:    "{{ hostvars[groups['bench_server'][0]].get('api_port',    api_port_default  | default('18082')) }}"
     k6_profiles:
-      - { name: small,  method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,      vus: 64, duration: "30s" }
-      - { name: medium, method: POST, path: "/post",              body_bytes: 8192,   vus: 48, duration: "30s" }
-      - { name: upload, method: POST, path: "/post",              body_bytes: 262144, vus: 16, duration: "30s" }
-      - { name: stream, method: GET,  path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "30s" }
+      - { family: metadata, profile: meta-4k, method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,       vus: 128, duration: "25s" }
+      - { family: metadata, profile: meta-8k, method: GET,  path: "/bytes/8192?seed=2", body_bytes: 0,       vus: 96,  duration: "25s" }
+      - { family: llm_sync, profile: llm-8k, method: POST, path: "/post",                body_bytes: 8192,    vus: 48,  duration: "25s" }
+      - { family: llm_sync, profile: llm-32k, method: POST, path: "/post",               body_bytes: 32768,   vus: 24,  duration: "25s" }
+      - { family: upload,   profile: asr-256k, method: POST, path: "/post",              body_bytes: 262144,  vus: 16,  duration: "25s" }
+      - { family: upload,   profile: asr-1m, method: POST, path: "/post",                body_bytes: 1048576, vus: 8,   duration: "25s" }
+      - { family: stream,   profile: sse-2s-32k, method: GET, path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "25s" }
+      - { family: stream,   profile: sse-5s-64k, method: GET, path: "/drip?duration=5&numbytes=65536&delay=0&code=200", body_bytes: 0, vus: 8, duration: "25s" }
     bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
                 lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
                 + \" | awk '/^hostname /{print $2}'\")) }}"
@@ -387,7 +395,7 @@
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
         [ -f /tmp/bench-{{ bench_ts }}/k6_summary.csv ] || \
-          echo "variant,profile,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
+          echo "variant,family,profile,method,body_bytes,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
           echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
@@ -417,10 +425,14 @@
     nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
     api_port:    "{{ hostvars[groups['bench_server'][0]].get('api_port',    api_port_default  | default('18082')) }}"
     k6_profiles:
-      - { name: small,  method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,      vus: 64, duration: "30s" }
-      - { name: medium, method: POST, path: "/post",              body_bytes: 8192,   vus: 48, duration: "30s" }
-      - { name: upload, method: POST, path: "/post",              body_bytes: 262144, vus: 16, duration: "30s" }
-      - { name: stream, method: GET,  path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "30s" }
+      - { family: metadata, profile: meta-4k, method: GET,  path: "/bytes/4096?seed=1", body_bytes: 0,       vus: 128, duration: "25s" }
+      - { family: metadata, profile: meta-8k, method: GET,  path: "/bytes/8192?seed=2", body_bytes: 0,       vus: 96,  duration: "25s" }
+      - { family: llm_sync, profile: llm-8k, method: POST, path: "/post",                body_bytes: 8192,    vus: 48,  duration: "25s" }
+      - { family: llm_sync, profile: llm-32k, method: POST, path: "/post",               body_bytes: 32768,   vus: 24,  duration: "25s" }
+      - { family: upload,   profile: asr-256k, method: POST, path: "/post",              body_bytes: 262144,  vus: 16,  duration: "25s" }
+      - { family: upload,   profile: asr-1m, method: POST, path: "/post",                body_bytes: 1048576, vus: 8,   duration: "25s" }
+      - { family: stream,   profile: sse-2s-32k, method: GET, path: "/drip?duration=2&numbytes=32768&delay=0&code=200", body_bytes: 0, vus: 16, duration: "25s" }
+      - { family: stream,   profile: sse-5s-64k, method: GET, path: "/drip?duration=5&numbytes=65536&delay=0&code=200", body_bytes: 0, vus: 8, duration: "25s" }
     bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
                 lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
                 + \" | awk '/^hostname /{print $2}'\")) }}"
@@ -458,7 +470,7 @@
         [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
           echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
         [ -f /tmp/bench-{{ bench_ts }}/k6_summary.csv ] || \
-          echo "variant,profile,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
+          echo "variant,family,profile,method,body_bytes,vus,duration_s,http_reqs,rps,error_rate,p50_ms,p95_ms,p99_ms,max_ms,waiting_p95_ms,connect_p95_ms,tls_p95_ms,blocked_p95_ms,iteration_p95_ms" > /tmp/bench-{{ bench_ts }}/k6_summary.csv
         [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
           echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
       changed_when: false
