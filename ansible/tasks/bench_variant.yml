@@ -1,6 +1,6 @@
 ---
-# tasks/bench_variant.yml — measurements for one cfwarp variant.
-# Expects: variant.name, variant.image, variant.state_mount, variant.extra_args
+# tasks/bench_variant.yml — measurements for one warp variant.
+# Expects: variant.name, variant.image, variant.run_cmd, variant.startup_marker
 # Expects on host: bench_ts, bench_ip, iperf3_port, nginx_port,
 #                  runs_lat, runs_thr, iperf3_duration, iperf3_parallel,
 #                  container_cpus, container_memory, tunnel_wait_sec, state_volume
@@ -9,18 +9,9 @@
   ansible.builtin.shell: docker rm -f cfwarp-bench-{{ variant.name }} 2>/dev/null || true
   changed_when: false
 
-- name: "[{{ variant.name }}] Start cfwarp container"
+- name: "[{{ variant.name }}] Start benchmark container"
   ansible.builtin.shell: |
-    docker run -d \
-      --name cfwarp-bench-{{ variant.name }} \
-      --cpus="{{ container_cpus }}" \
-      --memory="{{ container_memory }}" \
-      -v {{ state_volume }}:{{ variant.state_mount }} \
-      -e CFWARP_STATE_DIR={{ variant.state_mount }} \
-      -e CFWARP_LISTEN_HOST=0.0.0.0 \
-      -e CFWARP_LISTEN_PORT=1080 \
-      -e CFWARP_PROXY_MODE=socks5 \
-      {{ variant.image }} {{ variant.extra_args }}
+    {{ variant.run_cmd }}
 
 - name: "[{{ variant.name }}] Wait for WireGuard tunnel (ping through shared netns)"
   ansible.builtin.shell: >-
@@ -44,11 +35,11 @@
   register: _startup_logs
   changed_when: false
 
-- name: "[{{ variant.name }}] Assert sing-box started"
+- name: "[{{ variant.name }}] Assert startup marker detected"
   ansible.builtin.assert:
     that:
-      - "'Starting singbox-wireguard' in (_startup_logs.stdout | default(''))"
-    fail_msg: "cfwarp container started but sing-box startup marker was not found"
+      - "variant.startup_marker in (_startup_logs.stdout | default(''))"
+    fail_msg: "startup marker not found for {{ variant.name }}"
 
 - name: "[{{ variant.name }}] Warmup — 5 pings to stabilise WireGuard session"
   ansible.builtin.shell: >-
@@ -64,7 +55,8 @@
     - name: "[{{ variant.name }}] Start latency docker stats sampler"
       ansible.builtin.shell: |
         pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-latency-sampler.pid
-        rm -f "$pidfile"
+        statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-latency.state
+        rm -f "$pidfile" "$statefile"
         nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" latency cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
         echo $! > "$pidfile"
       changed_when: false
@@ -122,7 +114,8 @@
     - name: "[{{ variant.name }}] Start iperf3 docker stats sampler"
       ansible.builtin.shell: |
         pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-iperf3-sampler.pid
-        rm -f "$pidfile"
+        statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-iperf3.state
+        rm -f "$pidfile" "$statefile"
         nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" iperf3 cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
         echo $! > "$pidfile"
       changed_when: false
@@ -220,7 +213,8 @@
     - name: "[{{ variant.name }}] Start HTTP docker stats sampler"
       ansible.builtin.shell: |
         pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-http-sampler.pid
-        rm -f "$pidfile"
+        statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-http.state
+        rm -f "$pidfile" "$statefile"
         nohup sh -c 'while :; do /tmp/docker_stats.sh "{{ variant.name }}" http cfwarp-bench-{{ variant.name }} /tmp/bench-{{ bench_ts }}/container_stats.csv; sleep 1; done' >/dev/null 2>&1 &
         echo $! > "$pidfile"
       changed_when: false

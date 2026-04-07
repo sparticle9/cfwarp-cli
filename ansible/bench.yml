@@ -11,7 +11,8 @@
 #   prepare        Play 2: pull images, register WARP account on tyo
 #   bench-alpine   Play 3a: run measurements for alpine variant only
 #   bench-debian   Play 3b: run measurements for debian variant only
-#   bench          Play 3: run all variant measurements (both)
+#   bench-microwarp Play 3c: run measurements for original MicroWARP only
+#   bench          Play 3: run all variant measurements
 #   report         Play 4: generate + fetch markdown report
 #   teardown       Play 5: stop laxhd server containers
 #
@@ -47,43 +48,65 @@
     nginx_file_mb: 512
 
   tasks:
-    - name: Find free port for iperf3
+    - name: Inspect existing iperf3 container
+      ansible.builtin.shell: docker inspect -f '{{ "{{.State.Status}}" }}' bench-iperf3 2>/dev/null || true
+      register: _iperf3_status
+      changed_when: false
+
+    - name: Inspect existing nginx container
+      ansible.builtin.shell: docker inspect -f '{{ "{{.State.Status}}" }}' bench-nginx 2>/dev/null || true
+      register: _nginx_status
+      changed_when: false
+
+    - name: Reuse existing iperf3 port if container is already running
+      ansible.builtin.shell: docker inspect -f '{{ "{{(index (index .NetworkSettings.Ports \"5201/tcp\") 0).HostPort}}" }}' bench-iperf3
+      register: _iperf3_port_existing
+      changed_when: false
+      when: (_iperf3_status.stdout | trim) == 'running'
+
+    - name: Reuse existing nginx port if container is already running
+      ansible.builtin.shell: docker inspect -f '{{ "{{(index (index .NetworkSettings.Ports \"80/tcp\") 0).HostPort}}" }}' bench-nginx
+      register: _nginx_port_existing
+      changed_when: false
+      when: (_nginx_status.stdout | trim) == 'running'
+
+    - name: Find free port for iperf3 if not already running
       ansible.builtin.shell: |
         port=15201
         while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do port=$((port+1)); done
         echo $port
-      register: _iperf3_port
+      register: _iperf3_port_new
       changed_when: false
+      when: (_iperf3_status.stdout | trim) != 'running'
 
-    - name: Find free port for nginx
+    - name: Find free port for nginx if not already running
       ansible.builtin.shell: |
-        taken={{ _iperf3_port.stdout | trim }}
+        taken={{ (_iperf3_port_new.stdout | trim) if (_iperf3_port_new is defined and _iperf3_port_new.stdout is defined) else '15201' }}
         port=$(( 18080 > taken ? 18080 : taken + 1 ))
         while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do port=$((port+1)); done
         echo $port
-      register: _nginx_port
+      register: _nginx_port_new
+      changed_when: false
+      when: (_nginx_status.stdout | trim) != 'running'
+
+    - name: Remove stale non-running bench containers
+      ansible.builtin.shell: |
+        [ "{{ _iperf3_status.stdout | trim }}" = "running" ] || docker rm -f bench-iperf3 2>/dev/null || true
+        [ "{{ _nginx_status.stdout | trim }}" = "running" ] || docker rm -f bench-nginx 2>/dev/null || true
       changed_when: false
 
-    - name: Store ports as host facts
-      ansible.builtin.set_fact:
-        iperf3_port: "{{ _iperf3_port.stdout | trim }}"
-        nginx_port:  "{{ _nginx_port.stdout  | trim }}"
-
-    - name: Remove stale bench containers
-      ansible.builtin.shell: docker rm -f bench-iperf3 bench-nginx 2>/dev/null || true
-      changed_when: false
-
-    - name: Start iperf3 server
+    - name: Start iperf3 server if needed
       ansible.builtin.shell: |
         docker run -d --name bench-iperf3 \
-          -p "{{ _iperf3_port.stdout | trim }}:5201/tcp" \
-          -p "{{ _iperf3_port.stdout | trim }}:5201/udp" \
+          -p "{{ _iperf3_port_new.stdout | trim }}:5201/tcp" \
+          -p "{{ _iperf3_port_new.stdout | trim }}:5201/udp" \
           --restart no networkstatic/iperf3 -s
+      when: (_iperf3_status.stdout | trim) != 'running'
 
-    - name: Start nginx with tmpfs static file
+    - name: Start nginx with tmpfs static file if needed
       ansible.builtin.shell: |
         docker run -d --name bench-nginx \
-          -p "{{ _nginx_port.stdout | trim }}:80" \
+          -p "{{ _nginx_port_new.stdout | trim }}:80" \
           --restart no \
           --tmpfs /bench:rw,size={{ nginx_file_mb }}m \
           nginx:alpine sh -c '
@@ -98,20 +121,26 @@
             rm -f /etc/nginx/conf.d/default.conf
             nginx -g "daemon off;"
           '
+      when: (_nginx_status.stdout | trim) != 'running'
+
+    - name: Store ports as host facts
+      ansible.builtin.set_fact:
+        iperf3_port: "{{ (_iperf3_port_existing.stdout | trim) if (_iperf3_port_existing is defined and _iperf3_port_existing.stdout is defined and (_iperf3_port_existing.stdout | trim) != '') else (_iperf3_port_new.stdout | trim) }}"
+        nginx_port:  "{{ (_nginx_port_existing.stdout | trim) if (_nginx_port_existing is defined and _nginx_port_existing.stdout is defined and (_nginx_port_existing.stdout | trim) != '') else (_nginx_port_new.stdout | trim) }}"
 
     - name: Wait for iperf3 port
       ansible.builtin.wait_for:
-        port: "{{ _iperf3_port.stdout | trim }}"
+        port: "{{ iperf3_port }}"
         timeout: 30
 
     - name: Wait for nginx port
       ansible.builtin.wait_for:
-        port: "{{ _nginx_port.stdout | trim }}"
+        port: "{{ nginx_port }}"
         timeout: 120
 
     - name: Report ports
       ansible.builtin.debug:
-        msg: "laxhd  iperf3={{ _iperf3_port.stdout | trim }}  nginx={{ _nginx_port.stdout | trim }}"
+        msg: "laxhd  iperf3={{ iperf3_port }}  nginx={{ nginx_port }}"
 
 
 # ── Play 2: Prepare tyo ───────────────────────────────────────────────────────
@@ -123,6 +152,7 @@
   vars:
     cfwarp_image_alpine: "ghcr.io/sparticle9/cfwarp-cli:latest"
     cfwarp_image_debian: "ghcr.io/sparticle9/cfwarp-cli:latest-debian"
+    microwarp_image: "ghcr.io/ccbkkb/microwarp:latest"
     state_volume: "cfwarp-bench-state"
 
   tasks:
@@ -132,6 +162,10 @@
 
     - name: Pull debian image
       ansible.builtin.shell: docker pull {{ cfwarp_image_debian }}
+      changed_when: false
+
+    - name: Pull microwarp image
+      ansible.builtin.shell: docker pull {{ microwarp_image }}
       changed_when: false
 
     - name: Check if state volume exists
@@ -202,8 +236,18 @@
     variant:
       name: alpine
       image: "{{ cfwarp_image_alpine }}"
-      state_mount: "/home/cfwarp/.local/state/cfwarp-cli"
-      extra_args: ""
+      startup_marker: "Starting singbox-wireguard"
+      run_cmd: |
+        docker run -d \
+          --name cfwarp-bench-alpine \
+          --cpus="{{ container_cpus }}" \
+          --memory="{{ container_memory }}" \
+          -v {{ state_volume }}:/home/cfwarp/.local/state/cfwarp-cli \
+          -e CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli \
+          -e CFWARP_LISTEN_HOST=0.0.0.0 \
+          -e CFWARP_LISTEN_PORT=1080 \
+          -e CFWARP_PROXY_MODE=socks5 \
+          {{ cfwarp_image_alpine }}
 
   tasks:
     - name: Set bench timestamp (alpine)
@@ -253,16 +297,97 @@
     variant:
       name: debian
       image: "{{ cfwarp_image_debian }}"
-      # Mount at same path as alpine so account.json (uid 1000) is found
-      state_mount: "/home/cfwarp/.local/state/cfwarp-cli"
-      extra_args: "--state-dir /home/cfwarp/.local/state/cfwarp-cli"
+      startup_marker: "Starting singbox-wireguard"
+      run_cmd: |
+        docker run -d \
+          --name cfwarp-bench-debian \
+          --cpus="{{ container_cpus }}" \
+          --memory="{{ container_memory }}" \
+          -v {{ state_volume }}:/home/cfwarp/.local/state/cfwarp-cli \
+          -e CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli \
+          {{ cfwarp_image_debian }} --state-dir /home/cfwarp/.local/state/cfwarp-cli
 
   tasks:
     - name: Set bench timestamp (debian — reuse alpine ts if set)
       ansible.builtin.set_fact:
         bench_ts: "{{ bench_ts | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
 
+    - name: Create results dir and write CSV headers
+      ansible.builtin.shell: |
+        mkdir -p /tmp/bench-{{ bench_ts }}
+        [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
+          echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
+        [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
+          echo "variant,run,direction,bits_per_second,retransmits" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
+        [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
+          echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
+          echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
+      changed_when: false
+
     - name: Run debian variant measurements
+      ansible.builtin.include_tasks: tasks/bench_variant.yml
+
+
+# ── Play 3c: MicroWARP variant ───────────────────────────────────────────────
+- name: "3c · Benchmark — microwarp variant"
+  hosts: warp
+  gather_facts: false
+  tags: [bench, bench-microwarp]
+
+  vars:
+    microwarp_image: "ghcr.io/ccbkkb/microwarp:latest"
+    state_volume:    "microwarp-bench-state"
+    iperf3_duration: 30
+    iperf3_parallel: 4
+    runs_lat:        50
+    runs_thr:        3
+    nginx_file_mb:   512
+    container_cpus:  "2"
+    container_memory: "512m"
+    tunnel_wait_sec: 90
+    iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('iperf3_port', iperf3_port_default | default('15201')) }}"
+    nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
+    bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
+                lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
+                + \" | awk '/^hostname /{print $2}'\")) }}"
+
+    variant:
+      name: microwarp
+      image: "{{ microwarp_image }}"
+      startup_marker: "MicroSOCKS"
+      run_cmd: |
+        docker run -d \
+          --name cfwarp-bench-microwarp \
+          --cpus="{{ container_cpus }}" \
+          --memory="{{ container_memory }}" \
+          --cap-add NET_ADMIN \
+          --cap-add SYS_MODULE \
+          --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+          -v {{ state_volume }}:/etc/wireguard \
+          -e BIND_ADDR=0.0.0.0 \
+          -e BIND_PORT=1080 \
+          {{ microwarp_image }}
+
+  tasks:
+    - name: Set bench timestamp (microwarp — reuse prior ts if set)
+      ansible.builtin.set_fact:
+        bench_ts: "{{ bench_ts | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
+
+    - name: Create results dir and write CSV headers
+      ansible.builtin.shell: |
+        mkdir -p /tmp/bench-{{ bench_ts }}
+        [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
+          echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
+        [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
+          echo "variant,run,direction,bits_per_second,retransmits" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
+        [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
+          echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
+          echo "sample_ts,variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
+      changed_when: false
+
+    - name: Run microwarp variant measurements
       ansible.builtin.include_tasks: tasks/bench_variant.yml
 
 
@@ -275,6 +400,7 @@
   vars:
     cfwarp_image_alpine: "ghcr.io/sparticle9/cfwarp-cli:latest"
     cfwarp_image_debian: "ghcr.io/sparticle9/cfwarp-cli:latest-debian"
+    microwarp_image: "ghcr.io/ccbkkb/microwarp:latest"
     iperf3_duration: 30
     iperf3_parallel: 4
     runs_lat:        50
@@ -317,6 +443,8 @@
           - "{{ cfwarp_image_alpine }}"
           - --debian-image
           - "{{ cfwarp_image_debian }}"
+          - --microwarp-image
+          - "{{ microwarp_image }}"
           - --container-cpus
           - "{{ container_cpus }}"
           - --container-memory
