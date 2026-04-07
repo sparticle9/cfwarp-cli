@@ -1,0 +1,190 @@
+---
+# tasks/bench_variant.yml — measurements for one cfwarp variant.
+# Included in a loop from bench.yml with loop_var: variant.
+#
+# variant.name        "alpine" | "debian"
+# variant.image       full image ref
+# variant.state_mount path inside container for the state volume
+
+# ── Container start ───────────────────────────────────────────────────────────
+- name: "[{{ variant.name }}] Remove any previous bench container"
+  ansible.builtin.shell: docker rm -f cfwarp-bench-{{ variant.name }} 2>/dev/null || true
+  changed_when: false
+
+- name: "[{{ variant.name }}] Pull latest image"
+  ansible.builtin.shell: docker pull {{ variant.image }}
+  changed_when: false
+
+- name: "[{{ variant.name }}] Start cfwarp container"
+  ansible.builtin.shell: |
+    docker run -d \
+      --name cfwarp-bench-{{ variant.name }} \
+      --cpus="{{ container_cpus }}" \
+      --memory="{{ container_memory }}" \
+      -v {{ state_volume }}:{{ variant.state_mount }} \
+      -e CFWARP_LISTEN_HOST=0.0.0.0 \
+      -e CFWARP_LISTEN_PORT=1080 \
+      -e CFWARP_PROXY_MODE=socks5 \
+      -e CFWARP_STATE_DIR={{ variant.state_mount }} \
+      {{ variant.image }}
+
+# Wait by checking raw reachability of bench_server through the WireGuard tunnel.
+# Client container shares cfwarp's network namespace — no SOCKS involved.
+- name: "[{{ variant.name }}] Wait for WireGuard tunnel (ping bench_server through shared netns)"
+  ansible.builtin.shell: |
+    docker run --rm \
+      --network container:cfwarp-bench-{{ variant.name }} \
+      alpine ping -c1 -W3 {{ _bench_host }} >/dev/null 2>&1
+  register: _tunnel_ready
+  retries: "{{ (tunnel_wait_sec | int // 3) }}"
+  delay: 3
+  until: _tunnel_ready.rc == 0
+  changed_when: false
+
+- name: "[{{ variant.name }}] Warmup — allow WireGuard session to stabilise (5 pings)"
+  ansible.builtin.shell: |
+    docker run --rm \
+      --network container:cfwarp-bench-{{ variant.name }} \
+      alpine ping -c5 -W3 {{ _bench_host }} >/dev/null 2>&1
+  changed_when: false
+  failed_when: false
+
+# ── Latency phase ─────────────────────────────────────────────────────────────
+- name: "[{{ variant.name }}] Latency — {{ runs_lat }} pings through WireGuard tunnel"
+  ansible.builtin.shell: |
+    docker run --rm \
+      --network container:cfwarp-bench-{{ variant.name }} \
+      alpine sh -c '
+        for i in $(seq 1 {{ runs_lat }}); do
+          rtt=$(ping -c1 -W5 {{ _bench_host }} 2>/dev/null \
+                | grep "time=" | sed "s/.*time=//;s/ ms//")
+          echo "{{ variant.name }},${i},${rtt:-ERR}"
+        done
+      '
+  register: _lat_results
+  changed_when: false
+
+- name: "[{{ variant.name }}] Append latency rows to CSV"
+  ansible.builtin.lineinfile:
+    path: "{{ results_dir }}/latency_{{ bench_ts }}.csv"
+    line: "{{ item }}"
+    insertafter: EOF
+  loop: "{{ _lat_results.stdout_lines }}"
+
+# Stats snapshot: CPU and memory during latency (light) phase
+- name: "[{{ variant.name }}] Stats snapshot — latency phase"
+  ansible.builtin.shell: |
+    docker stats --no-stream \
+      --format "{{ variant.name }},latency,{{{{.CPUPerc}}}},{{{{.MemUsage}}}},{{{{.NetIO}}}},{{{{.BlockIO}}}}" \
+      cfwarp-bench-{{ variant.name }} \
+    | awk -F'[,/]' '{
+        # NetIO: "X kB / Y kB" → split into rx,tx
+        # MemUsage: "X MiB / Y MiB" → split into used,limit
+        # Input cols: variant,phase,cpu,mem(used / limit),net(rx / tx),blk(r / w)
+        cpu=$3
+        mused=$4; mlimit=$5
+        nrx=$6; ntx=$7
+        br=$8; bw=$9
+        printf "%s,%s,%s,%s,%s,%s,%s,%s,%s\n",$1,$2,cpu,mused,mlimit,nrx,ntx,br,bw
+      }'
+  register: _stats_lat
+  changed_when: false
+  failed_when: false
+
+- name: "[{{ variant.name }}] Append latency-phase stats to CSV"
+  ansible.builtin.lineinfile:
+    path: "{{ results_dir }}/container_stats_{{ bench_ts }}.csv"
+    line: "{{ _stats_lat.stdout }}"
+    insertafter: EOF
+  when: _stats_lat.stdout | length > 0
+
+# ── iperf3 throughput phase ───────────────────────────────────────────────────
+- name: "[{{ variant.name }}] iperf3 — {{ runs_thr }} × {{ iperf3_duration }}s ({{ iperf3_parallel }} streams)"
+  ansible.builtin.shell: |
+    docker run --rm \
+      --network container:cfwarp-bench-{{ variant.name }} \
+      networkstatic/iperf3 \
+      -c {{ _bench_host }} -p {{ iperf3_port }} \
+      -t {{ iperf3_duration }} \
+      -P {{ iperf3_parallel }} \
+      --json 2>/dev/null \
+    | awk '
+        /"sum_received"/ { found=1 }
+        found && /"bits_per_second"/ {
+          gsub(/[^0-9.]/,"",$2)
+          printf "%s", $2; exit
+        }
+      '
+  register: _iperf3_runs
+  loop: "{{ range(1, runs_thr | int + 1) | list }}"
+  loop_control:
+    loop_var: _run
+    label: "run {{ _run }}/{{ runs_thr }}"
+  changed_when: false
+  failed_when: false
+
+- name: "[{{ variant.name }}] Append iperf3 rows to CSV"
+  ansible.builtin.lineinfile:
+    path: "{{ results_dir }}/throughput_iperf3_{{ bench_ts }}.csv"
+    line: "{{ variant.name }},{{ item._run }},{{ item.stdout | default('ERR') }}"
+    insertafter: EOF
+  loop: "{{ _iperf3_runs.results }}"
+  loop_control:
+    label: "run {{ item._run }}"
+
+# Stats snapshot: CPU and memory under peak throughput load
+- name: "[{{ variant.name }}] Stats snapshot — throughput peak"
+  ansible.builtin.shell: |
+    docker stats --no-stream \
+      --format "{{ variant.name }},throughput,{{{{.CPUPerc}}}},{{{{.MemUsage}}}},{{{{.NetIO}}}},{{{{.BlockIO}}}}" \
+      cfwarp-bench-{{ variant.name }} \
+    | awk -F'[,/]' '{
+        cpu=$3; mused=$4; mlimit=$5; nrx=$6; ntx=$7; br=$8; bw=$9
+        printf "%s,%s,%s,%s,%s,%s,%s,%s,%s\n",$1,$2,cpu,mused,mlimit,nrx,ntx,br,bw
+      }'
+  register: _stats_thr
+  changed_when: false
+  failed_when: false
+
+- name: "[{{ variant.name }}] Append throughput-phase stats to CSV"
+  ansible.builtin.lineinfile:
+    path: "{{ results_dir }}/container_stats_{{ bench_ts }}.csv"
+    line: "{{ _stats_thr.stdout }}"
+    insertafter: EOF
+  when: _stats_thr.stdout | length > 0
+
+# ── HTTP bulk download phase ──────────────────────────────────────────────────
+- name: "[{{ variant.name }}] HTTP download — {{ runs_thr }} × {{ nginx_file_mb }}MB file"
+  ansible.builtin.shell: |
+    docker run --rm \
+      --network container:cfwarp-bench-{{ variant.name }} \
+      curlimages/curl \
+      -sS -o /dev/null \
+      --max-time 300 \
+      --write-out "%{time_total},%{size_download},%{speed_download},%{http_code}" \
+      "http://{{ _bench_host }}:{{ nginx_port }}/data.bin"
+  register: _http_runs
+  loop: "{{ range(1, runs_thr | int + 1) | list }}"
+  loop_control:
+    loop_var: _run
+    label: "run {{ _run }}/{{ runs_thr }}"
+  changed_when: false
+  failed_when: false
+
+- name: "[{{ variant.name }}] Append HTTP download rows to CSV"
+  ansible.builtin.lineinfile:
+    path: "{{ results_dir }}/throughput_http_{{ bench_ts }}.csv"
+    line: "{{ variant.name }},{{ item._run }},{{ item.stdout | default('ERR,0,0,0') }}"
+    insertafter: EOF
+  loop: "{{ _http_runs.results }}"
+  loop_control:
+    label: "run {{ item._run }}"
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+- name: "[{{ variant.name }}] Stop and remove cfwarp container"
+  ansible.builtin.shell: docker rm -f cfwarp-bench-{{ variant.name }} 2>/dev/null || true
+  changed_when: false
+
+- name: "[{{ variant.name }}] Cool-down between variants (avoid lingering WireGuard sessions)"
+  ansible.builtin.pause:
+    seconds: 5

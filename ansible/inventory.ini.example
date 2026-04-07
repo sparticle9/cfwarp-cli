@@ -1,0 +1,22 @@
+# inventory.ini.example — copy to inventory.ini and fill in your hosts.
+#
+# Host names are resolved via ~/.ssh/config — no need to specify
+# ansible_host / ansible_user / ansible_port here if SSH config handles them.
+# Add ansible_user= only if your SSH config does not set a User directive.
+
+# ── Production WARP proxy hosts ───────────────────────────────────────────────
+[warp]
+tyo        # e.g. Tokyo VPS — name must match your ~/.ssh/config Host entry
+# sgp
+# fra
+
+[warp:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
+
+# ── Benchmark target server ───────────────────────────────────────────────────
+# One host that acts as iperf3 + nginx server during bench.yml runs.
+[bench_server]
+laxhd      # e.g. Los Angeles VPS — name must match your ~/.ssh/config Host entry
+
+[bench_server:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'

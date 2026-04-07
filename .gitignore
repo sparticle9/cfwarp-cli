@@ -8,3 +8,10 @@
 .coverage
 __pycache__/
 *.log
+.ace-tool/
+
+# Ansible — real inventory contains hostnames/users; keep out of VCS
+ansible/inventory.ini
+
+# Benchmark result artefacts
+bench-results/

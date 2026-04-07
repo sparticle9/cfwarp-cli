@@ -9,11 +9,23 @@ on:
 
 jobs:
   build-push:
-    name: Build & Push
+    name: Build & Push (${{ matrix.variant }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      matrix:
+        include:
+          # Alpine + gcompat — default production image
+          - variant: alpine
+            dockerfile: Dockerfile
+            suffix: ""
+          # Debian distroless — benchmark / security comparison image
+          - variant: debian
+            dockerfile: Dockerfile.debian
+            suffix: -debian
 
     steps:
       - uses: actions/checkout@v6
@@ -32,6 +44,9 @@ jobs:
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          # Append variant suffix so tags become e.g. latest-debian, v1.2.3-debian
+          flavor: |
+            suffix=${{ matrix.suffix }},onlatest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -42,6 +57,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

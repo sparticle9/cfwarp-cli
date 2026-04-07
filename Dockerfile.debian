@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+# Debian/distroless variant — native glibc, no gcompat shim.
+# Purpose: A/B performance benchmarking against the Alpine+gcompat image.
+# Security: gcr.io/distroless/base-debian12:nonroot — no shell, no package manager.
+#
+# NOTE: distroless has no shell, so auto-registration must be done before first
+# run (pre-populate the state volume) or via CFWARP_REGISTER_ON_START=1 which
+# is handled inside the Go binary's up command (see cmd/up.go auto-register flag).
+
+ARG SINGBOX_VERSION=1.13.5
+ARG DEBIAN_VERSION=13
+
+# ── Stage 1: Build cfwarp-cli (static, CGO_ENABLED=0) ───────────────────────
+FROM golang:1.26-alpine AS builder
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build \
+    -trimpath \
+    -ldflags="-s -w \
+      -X github.com/nexus/cfwarp-cli/internal/version.Version=${VERSION} \
+      -X github.com/nexus/cfwarp-cli/internal/version.Commit=${COMMIT} \
+      -X github.com/nexus/cfwarp-cli/internal/version.Date=${BUILD_DATE}" \
+    -o /out/cfwarp-cli .
+
+# ── Stage 2: Fetch sing-box for target arch ──────────────────────────────────
+FROM alpine:3.23 AS singbox
+ARG SINGBOX_VERSION=1.13.5
+ARG TARGETARCH=amd64
+
+RUN apk add --no-cache curl ca-certificates && \
+    mkdir -p /out && \
+    curl -fsSL \
+      "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${TARGETARCH}.tar.gz" \
+      | tar -xz --strip-components=1 -C /tmp && \
+    install -m 0755 /tmp/sing-box /out/sing-box
+
+# ── Stage 3: Distroless runtime — native glibc, no shell, non-root ───────────
+# :nonroot sets USER to 65532 (nobody). State dir must be pre-created via volume.
+FROM gcr.io/distroless/base-debian${DEBIAN_VERSION}:nonroot
+
+ENV HOME=/home/nonroot \
+    CFWARP_STATE_DIR=/home/nonroot/.local/state/cfwarp-cli
+
+COPY --from=builder  /out/cfwarp-cli   /usr/local/bin/cfwarp-cli
+COPY --from=singbox  /out/sing-box     /usr/local/bin/sing-box
+
+VOLUME /home/nonroot/.local/state/cfwarp-cli
+EXPOSE 1080
+
+# distroless:nonroot already sets USER 65532; state volume must be mounted
+# with matching ownership (chown 65532:65532) before first start.
+ENTRYPOINT ["/usr/local/bin/cfwarp-cli", "up", "--foreground"]
