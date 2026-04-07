@@ -1,124 +1,100 @@
 ---
-# bench.yml — Raw WireGuard tunnel A/B benchmark: Alpine+gcompat vs Debian/distroless.
+# bench.yml — Raw WireGuard tunnel A/B benchmark
 #
-# ── What is being tested ─────────────────────────────────────────────────────
-# Traffic path:
-#   [client container, netns shared with cfwarp]
-#       ──→ WireGuard userspace (cfwarp)
-#       ──→ Cloudflare WARP exit node
-#       ──→ internet
-#       ──→ [bench_server: iperf3-server + nginx containers]
+# ── Topology ─────────────────────────────────────────────────────────────────
+#   localhost  Ansible controller — orchestrates only
+#   tyo        Proxy host — runs cfwarp + client containers
+#   laxhd      Bench target — iperf3-server + nginx in Docker
 #
-# The SOCKS inbound is NOT exercised. Client containers share cfwarp's network
-# namespace so all traffic exits through the WireGuard tunnel directly — the
-# same path used when cfwarp acts as a TUN gateway for other containers in a
-# compose stack.
-#
-# ── Metrics collected ────────────────────────────────────────────────────────
-# Latency      p50 / p95 / p99 ping RTT (ms) through WireGuard tunnel
-# Throughput   iperf3: median + p95 Mbit/s  (N parallel TCP streams × D sec)
-# HTTP bulk    curl:   median MB/s file download over WireGuard
-# CPU          docker stats CPUPerc at latency phase + throughput peak
-# Memory       docker stats MemUsage at latency phase + throughput peak
-# Net I/O      docker stats NetIO (bytes in/out on WireGuard interface)
-# Efficiency   Mbit/s ÷ CPU%  (throughput per unit CPU cost — key comparison)
-#
-# ── Output ───────────────────────────────────────────────────────────────────
-# bench-results/latency_<ts>.csv
-# bench-results/throughput_iperf3_<ts>.csv
-# bench-results/throughput_http_<ts>.csv
-# bench-results/container_stats_<ts>.csv
-# bench-results/report_<ts>.md          ← human-readable markdown report
+# ── Tags (run stages independently to avoid full restarts) ───────────────────
+#   servers        Play 1: start iperf3 + nginx on laxhd
+#   prepare        Play 2: pull images, register WARP account on tyo
+#   bench-alpine   Play 3a: run measurements for alpine variant only
+#   bench-debian   Play 3b: run measurements for debian variant only
+#   bench          Play 3: run all variant measurements (both)
+#   report         Play 4: generate + fetch markdown report
+#   teardown       Play 5: stop laxhd server containers
 #
 # ── Usage ────────────────────────────────────────────────────────────────────
-# ansible-playbook -i inventory.ini bench.yml
-# ansible-playbook -i inventory.ini bench.yml -e iperf3_duration=60
-# ansible-playbook -i inventory.ini bench.yml \
-#   -e cfwarp_image_alpine=ghcr.io/sparticle9/cfwarp-cli:v1.2.0
+#   Full run:
+#     ansible-playbook -i inventory.ini bench.yml
 #
-# ── Variables (override with -e or group_vars/all.yml) ───────────────────────
-# cfwarp_image_alpine   alpine+gcompat image   default: ghcr.io/sparticle9/cfwarp-cli:latest
-# cfwarp_image_debian   debian distroless       default: ghcr.io/sparticle9/cfwarp-cli:latest-debian
-# state_volume          docker volume for pre-registered WARP state
-# iperf3_duration       seconds per iperf3 run
-# iperf3_parallel       parallel TCP streams
-# runs_lat              ping repetitions per variant
-# runs_thr              iperf3 + HTTP download repetitions per variant
-# nginx_file_mb         static file size served by bench_server nginx
-# container_cpus        CPU quota for each cfwarp container under test
-# container_memory      memory limit for each cfwarp container under test
-# tunnel_wait_sec       max seconds to wait for WireGuard tunnel
+#   Start servers only (once):
+#     ansible-playbook -i inventory.ini bench.yml --tags servers
+#
+#   Skip server setup (already running) and re-run bench:
+#     ansible-playbook -i inventory.ini bench.yml --skip-tags servers,prepare
+#
+#   Re-run just one variant after a failure:
+#     ansible-playbook -i inventory.ini bench.yml --tags bench-debian
+#
+#   Re-generate report from existing CSVs:
+#     ansible-playbook -i inventory.ini bench.yml --tags report \
+#       -e bench_ts=20260407T125556
+
+# Shared vars referenced across plays via hostvars
+# bench_ts:   set in play 3, must be passed with -e if running report standalone
+# bench_ip:   resolved in play 2, stored in tyo hostvars
 
 
-# ── Play 1: Provision server containers on bench_server (laxhd) ──────────────
-- name: Setup benchmark servers on bench_server
+# ── Play 1: Server containers on laxhd ───────────────────────────────────────
+- name: "1 · Setup bench servers on laxhd"
   hosts: bench_server
   gather_facts: false
+  tags: [servers]
 
   vars:
-    iperf3_port_candidate: 15201
-    nginx_port_candidate: 18080
-    nginx_file_mb: 512       # propagated from play 2 var if overridden via -e
+    nginx_file_mb: 512
 
   tasks:
-    - name: Find first free TCP port for iperf3
+    - name: Find free port for iperf3
       ansible.builtin.shell: |
-        port={{ iperf3_port_candidate }}
-        while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do
-          port=$((port + 1))
-        done
+        port=15201
+        while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do port=$((port+1)); done
         echo $port
       register: _iperf3_port
       changed_when: false
 
-    - name: Find first free TCP port for nginx (must differ from iperf3)
+    - name: Find free port for nginx
       ansible.builtin.shell: |
-        base={{ nginx_port_candidate }}
         taken={{ _iperf3_port.stdout | trim }}
-        port=$(( base > taken ? base : taken + 1 ))
-        while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do
-          port=$((port + 1))
-        done
+        port=$(( 18080 > taken ? 18080 : taken + 1 ))
+        while ss -tlnH "( sport = :${port} )" 2>/dev/null | grep -q .; do port=$((port+1)); done
         echo $port
       register: _nginx_port
       changed_when: false
 
-    - name: Expose ports as host facts for play 2
+    - name: Store ports as host facts
       ansible.builtin.set_fact:
         iperf3_port: "{{ _iperf3_port.stdout | trim }}"
         nginx_port:  "{{ _nginx_port.stdout  | trim }}"
 
-    - name: Remove stale bench containers if any
+    - name: Remove stale bench containers
       ansible.builtin.shell: docker rm -f bench-iperf3 bench-nginx 2>/dev/null || true
       changed_when: false
 
-    - name: Start iperf3 server container
+    - name: Start iperf3 server
       ansible.builtin.shell: |
         docker run -d --name bench-iperf3 \
           -p "{{ _iperf3_port.stdout | trim }}:5201/tcp" \
           -p "{{ _iperf3_port.stdout | trim }}:5201/udp" \
-          --restart no \
-          networkstatic/iperf3 -s
+          --restart no networkstatic/iperf3 -s
 
-    - name: Start nginx container with tmpfs static file
-      # nginx:alpine serves /bench/data.bin (generated in tmpfs — no disk writes on laxhd)
-      # and /204 as a tiny latency probe endpoint.
+    - name: Start nginx with tmpfs static file
       ansible.builtin.shell: |
         docker run -d --name bench-nginx \
           -p "{{ _nginx_port.stdout | trim }}:80" \
           --restart no \
           --tmpfs /bench:rw,size={{ nginx_file_mb }}m \
-          nginx:alpine \
-          sh -c '
+          nginx:alpine sh -c '
             dd if=/dev/urandom of=/bench/data.bin bs=1M count={{ nginx_file_mb }} 2>/dev/null
-            cat > /etc/nginx/conf.d/bench.conf <<NGINXEOF
+            cat > /etc/nginx/conf.d/bench.conf <<EOF
         server {
-            listen 80;
-            sendfile on;
+            listen 80; sendfile on;
             location /data.bin { alias /bench/data.bin; }
             location /204      { return 204; }
         }
-        NGINXEOF
+        EOF
             rm -f /etc/nginx/conf.d/default.conf
             nginx -g "daemon off;"
           '
@@ -128,24 +104,136 @@
         port: "{{ _iperf3_port.stdout | trim }}"
         timeout: 30
 
-    - name: Wait for nginx port (file generation may take a moment)
+    - name: Wait for nginx port
       ansible.builtin.wait_for:
         port: "{{ _nginx_port.stdout | trim }}"
         timeout: 120
 
-    - name: Report allocated ports
+    - name: Report ports
       ansible.builtin.debug:
-        msg: "bench_server ports — iperf3={{ _iperf3_port.stdout | trim }}  nginx={{ _nginx_port.stdout | trim }}"
+        msg: "laxhd  iperf3={{ _iperf3_port.stdout | trim }}  nginx={{ _nginx_port.stdout | trim }}"
 
 
-# ── Play 2: Run A/B benchmark from localhost (Ansible controller) ─────────────
-- name: Run A/B benchmark from localhost
-  hosts: localhost
-  connection: local
+# ── Play 2: Prepare tyo ───────────────────────────────────────────────────────
+- name: "2 · Prepare warp proxy host (tyo)"
+  hosts: warp
   gather_facts: false
+  tags: [prepare]
 
   vars:
     cfwarp_image_alpine: "ghcr.io/sparticle9/cfwarp-cli:latest"
+    cfwarp_image_debian: "ghcr.io/sparticle9/cfwarp-cli:latest-debian"
+    state_volume: "cfwarp-bench-state"
+
+  tasks:
+    - name: Pull alpine image
+      ansible.builtin.shell: docker pull {{ cfwarp_image_alpine }}
+      changed_when: false
+
+    - name: Pull debian image
+      ansible.builtin.shell: docker pull {{ cfwarp_image_debian }}
+      changed_when: false
+
+    - name: Check if state volume exists
+      ansible.builtin.shell: docker volume inspect {{ state_volume }}
+      register: _vol
+      changed_when: false
+      failed_when: false
+
+    - name: Register WARP account (first run only)
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v {{ state_volume }}:/home/cfwarp/.local/state/cfwarp-cli \
+          -e CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli \
+          --entrypoint cfwarp-cli \
+          {{ cfwarp_image_alpine }} \
+          register --state-dir /home/cfwarp/.local/state/cfwarp-cli
+      when: _vol.rc != 0
+
+    - name: Ensure state files are world-readable (for distroless uid 65532)
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v {{ state_volume }}:/data \
+          alpine chmod -R o+rwX /data
+      changed_when: false
+
+    - name: Copy docker stats helper script
+      ansible.builtin.copy:
+        src: files/docker_stats.sh
+        dest: /tmp/docker_stats.sh
+        mode: "0755"
+
+    - name: Resolve laxhd IP for container-internal use
+      ansible.builtin.set_fact:
+        bench_ip: "{{ hostvars[groups['bench_server'][0]].get('ansible_host',
+                    lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
+                    + \" | awk '/^hostname /{print $2}'\")) }}"
+
+    - name: Show bench_ip
+      ansible.builtin.debug:
+        msg: "bench_ip={{ bench_ip }}"
+
+
+# ── Play 3a: Alpine variant ───────────────────────────────────────────────────
+- name: "3a · Benchmark — alpine variant"
+  hosts: warp
+  gather_facts: false
+  tags: [bench, bench-alpine]
+
+  vars:
+    cfwarp_image_alpine: "ghcr.io/sparticle9/cfwarp-cli:latest"
+    state_volume:    "cfwarp-bench-state"
+    iperf3_duration: 30
+    iperf3_parallel: 4
+    runs_lat:        50
+    runs_thr:        3
+    nginx_file_mb:   512
+    container_cpus:  "2"
+    container_memory: "512m"
+    tunnel_wait_sec: 60
+    # Ports: prefer hostvars from play 1; fall back to -e override or defaults.
+    # Override with -e iperf3_port=15202 if running this play standalone.
+    iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('iperf3_port', iperf3_port_default | default('15201')) }}"
+    nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
+    bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
+                lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
+                + \" | awk '/^hostname /{print $2}'\")) }}"
+
+    variant:
+      name: alpine
+      image: "{{ cfwarp_image_alpine }}"
+      state_mount: "/home/cfwarp/.local/state/cfwarp-cli"
+      extra_args: ""
+
+  tasks:
+    - name: Set bench timestamp (alpine)
+      ansible.builtin.set_fact:
+        bench_ts: "{{ bench_ts | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
+
+    - name: Create results dir and write CSV headers
+      ansible.builtin.shell: |
+        mkdir -p /tmp/bench-{{ bench_ts }}
+        [ -f /tmp/bench-{{ bench_ts }}/latency.csv ] || \
+          echo "variant,run,rtt_ms" > /tmp/bench-{{ bench_ts }}/latency.csv
+        [ -f /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv ] || \
+          echo "variant,run,bits_per_second" > /tmp/bench-{{ bench_ts }}/throughput_iperf3.csv
+        [ -f /tmp/bench-{{ bench_ts }}/throughput_http.csv ] || \
+          echo "variant,run,time_total_s,size_bytes,speed_bps,http_code" > /tmp/bench-{{ bench_ts }}/throughput_http.csv
+        [ -f /tmp/bench-{{ bench_ts }}/container_stats.csv ] || \
+          echo "variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx" > /tmp/bench-{{ bench_ts }}/container_stats.csv
+      changed_when: false
+
+    - name: Run alpine variant measurements
+      ansible.builtin.include_tasks: tasks/bench_variant.yml
+
+
+# ── Play 3b: Debian variant ───────────────────────────────────────────────────
+- name: "3b · Benchmark — debian variant"
+  hosts: warp
+  gather_facts: false
+  tags: [bench, bench-debian]
+
+  vars:
     cfwarp_image_debian: "ghcr.io/sparticle9/cfwarp-cli:latest-debian"
     state_volume:    "cfwarp-bench-state"
     iperf3_duration: 30
@@ -156,83 +244,54 @@
     container_cpus:  "2"
     container_memory: "512m"
     tunnel_wait_sec: 60
-    results_dir: "{{ playbook_dir }}/../bench-results"
+    iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('iperf3_port', iperf3_port_default | default('15201')) }}"
+    nginx_port:  "{{ hostvars[groups['bench_server'][0]].get('nginx_port',  nginx_port_default  | default('18080')) }}"
+    bench_ip: "{{ hostvars[groups['warp'][0]].get('bench_ip',
+                lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
+                + \" | awk '/^hostname /{print $2}'\")) }}"
 
-    _bench_host:  "{{ groups['bench_server'][0] }}"
-    # Resolve the actual IP from SSH config so containers can reach it by IP
-    # (SSH aliases are not DNS-resolvable inside Docker network namespaces)
-    _bench_ip:    "{{ lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0] + \" | awk '/^hostname /{print $2}'\") }}"
-    iperf3_port:  "{{ hostvars[groups['bench_server'][0]]['iperf3_port'] }}"
-    nginx_port:   "{{ hostvars[groups['bench_server'][0]]['nginx_port'] }}"
-
-    cfwarp_variants:
-      - name: alpine
-        image: "{{ cfwarp_image_alpine }}"
-        state_mount: "/home/cfwarp/.local/state/cfwarp-cli"
-      - name: debian
-        image: "{{ cfwarp_image_debian }}"
-        state_mount: "/home/nonroot/.local/state/cfwarp-cli"
+    variant:
+      name: debian
+      image: "{{ cfwarp_image_debian }}"
+      # Mount at same path as alpine so account.json (uid 1000) is found
+      state_mount: "/home/cfwarp/.local/state/cfwarp-cli"
+      extra_args: "--state-dir /home/cfwarp/.local/state/cfwarp-cli"
 
   tasks:
-    - name: Ensure results directory exists
-      ansible.builtin.file:
-        path: "{{ results_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Record benchmark timestamp
+    - name: Set bench timestamp (debian — reuse alpine ts if set)
       ansible.builtin.set_fact:
-        bench_ts: "{{ lookup('pipe', 'date +%Y%m%dT%H%M%S') }}"
+        bench_ts: "{{ bench_ts | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
 
-    - name: Write CSV headers
-      ansible.builtin.copy:
-        dest: "{{ results_dir }}/{{ item.name }}"
-        content: "{{ item.header }}\n"
-        mode: "0644"
-      loop:
-        - name: "latency_{{ bench_ts }}.csv"
-          header: "variant,run,rtt_ms"
-        - name: "throughput_iperf3_{{ bench_ts }}.csv"
-          header: "variant,run,bits_per_second"
-        - name: "throughput_http_{{ bench_ts }}.csv"
-          header: "variant,run,time_total_s,size_bytes,speed_bps,http_code"
-        - name: "container_stats_{{ bench_ts }}.csv"
-          header: "variant,phase,cpu_pct,mem_used,mem_limit,net_rx,net_tx,blk_r,blk_w"
-
-    - name: Check if WARP state volume exists
-      ansible.builtin.shell: docker volume inspect {{ state_volume }}
-      register: _vol_check
-      changed_when: false
-      failed_when: false
-
-    - name: Register new WARP account into state volume (first run only)
-      ansible.builtin.shell: |
-        docker run --rm \
-          -v {{ state_volume }}:/home/cfwarp/.local/state/cfwarp-cli \
-          -e CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli \
-          --entrypoint cfwarp-cli \
-          {{ cfwarp_image_alpine }} \
-          register --state-dir /home/cfwarp/.local/state/cfwarp-cli
-      when: _vol_check.rc != 0
-
-    - name: Run all measurements for each cfwarp variant
+    - name: Run debian variant measurements
       ansible.builtin.include_tasks: tasks/bench_variant.yml
-      loop: "{{ cfwarp_variants }}"
-      loop_control:
-        loop_var: variant
-        label: "{{ variant.name }}"
 
-    # ── Generate markdown report ──────────────────────────────────────────────
-    - name: Generate markdown report
+
+# ── Play 4: Report ────────────────────────────────────────────────────────────
+- name: "4 · Generate and fetch report"
+  hosts: warp
+  gather_facts: false
+  tags: [report]
+
+  vars:
+    cfwarp_image_alpine: "ghcr.io/sparticle9/cfwarp-cli:latest"
+    cfwarp_image_debian: "ghcr.io/sparticle9/cfwarp-cli:latest-debian"
+    iperf3_duration: 30
+    iperf3_parallel: 4
+    runs_lat:        50
+    runs_thr:        3
+    nginx_file_mb:   512
+    container_cpus:  "2"
+    container_memory: "512m"
+
+  tasks:
+    - name: Require bench_ts
+      ansible.builtin.fail:
+        msg: "bench_ts not set. Pass -e bench_ts=<timestamp> or run bench plays first."
+      when: bench_ts is not defined
+
+    - name: Generate markdown report on tyo
       ansible.builtin.shell: |
-        set -e
-
-        LAT="{{ results_dir }}/latency_{{ bench_ts }}.csv"
-        IPERF="{{ results_dir }}/throughput_iperf3_{{ bench_ts }}.csv"
-        HTTP="{{ results_dir }}/throughput_http_{{ bench_ts }}.csv"
-        STATS="{{ results_dir }}/container_stats_{{ bench_ts }}.csv"
-        REPORT="{{ results_dir }}/report_{{ bench_ts }}.md"
-
+        D=/tmp/bench-{{ bench_ts }}
         {
         cat <<HEADER
         # cfwarp-cli Benchmark Report
@@ -240,132 +299,89 @@
         | Key | Value |
         |-----|-------|
         | Timestamp | {{ bench_ts }} |
-        | Bench server | {{ _bench_host }} |
+        | Proxy host | {{ inventory_hostname }} |
+        | Bench server | {{ groups['bench_server'][0] }} |
         | Alpine image | {{ cfwarp_image_alpine }} |
         | Debian image | {{ cfwarp_image_debian }} |
-        | Container CPU quota | {{ container_cpus }} |
-        | Container memory limit | {{ container_memory }} |
-        | iperf3 streams × duration | {{ iperf3_parallel }} × {{ iperf3_duration }}s |
-        | Latency probes (runs_lat) | {{ runs_lat }} |
-        | Throughput probes (runs_thr) | {{ runs_thr }} |
+        | Container CPU | {{ container_cpus }} vCPU |
+        | Container memory | {{ container_memory }} |
+        | iperf3 | {{ iperf3_parallel }} streams × {{ iperf3_duration }}s |
+        | Latency probes | {{ runs_lat }} pings per variant |
+        | Throughput probes | {{ runs_thr }} runs per variant |
         | HTTP file size | {{ nginx_file_mb }} MB |
 
         ---
 
-        ## Latency — ping RTT through WireGuard (ms)
+        ## Latency — ping RTT through WireGuard tunnel (ms)
 
         HEADER
 
         awk -F, '
         NR>1 && $3!="ERR" {
-          v=$1; t=$3+0
-          cnt[v]++; n=cnt[v]; vals[v][n]=t
-          sum[v]+=t
+          v=$1; t=$3+0; cnt[v]++; n=cnt[v]; vals[v,n]=t; sum[v]+=t
         }
         END {
           printf "| Variant | p50 | p95 | p99 | Mean | n |\n"
-          printf "|---------|-----|-----|-----|------|---|\n"
+          printf "|---------|----:|----:|----:|-----:|--:|\n"
           for (v in cnt) {
             n=cnt[v]
             for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v][i]>vals[v][j]) { tmp=vals[v][i]; vals[v][i]=vals[v][j]; vals[v][j]=tmp }
-            p50=vals[v][int(n*0.50)+1]
-            p95=vals[v][int(n*0.95)+1]
-            p99=vals[v][int(n*0.99)+1]
-            mean=sum[v]/n
-            printf "| %-8s | %.1f | %.1f | %.1f | %.1f | %d |\n", v, p50, p95, p99, mean, n
+              if (vals[v,i]>vals[v,j]) { tmp=vals[v,i]; vals[v,i]=vals[v,j]; vals[v,j]=tmp }
+            printf "| %-8s | %.1f | %.1f | %.1f | %.1f | %d |\n",
+              v, vals[v,int(n*0.50)+1], vals[v,int(n*0.95)+1], vals[v,int(n*0.99)+1], sum[v]/n, n
           }
-        }' "$LAT"
+        }' $D/latency.csv
 
         printf "\n---\n\n## Throughput — iperf3 raw WireGuard (Mbit/s)\n\n"
-
         awk -F, '
         NR>1 && $3!="ERR" && $3>0 {
-          v=$1; b=$3+0
-          cnt[v]++; n=cnt[v]; vals[v][n]=b
-          sum[v]+=b
+          v=$1; b=$3+0; cnt[v]++; n=cnt[v]; vals[v,n]=b; sum[v]+=b
           if (b>mx[v]) mx[v]=b
         }
         END {
           printf "| Variant | Median | p95 | Max | Mean | n |\n"
-          printf "|---------|--------|-----|-----|------|---|\n"
+          printf "|---------|-------:|----:|----:|-----:|--:|\n"
           for (v in cnt) {
             n=cnt[v]
             for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v][i]>vals[v][j]) { tmp=vals[v][i]; vals[v][i]=vals[v][j]; vals[v][j]=tmp }
-            med=vals[v][int(n*0.50)+1]
-            p95=vals[v][int(n*0.95)+1]
+              if (vals[v,i]>vals[v,j]) { tmp=vals[v,i]; vals[v,i]=vals[v,j]; vals[v,j]=tmp }
             printf "| %-8s | %.1f | %.1f | %.1f | %.1f | %d |\n",
-              v, med/1e6, p95/1e6, mx[v]/1e6, (sum[v]/n)/1e6, n
+              v, vals[v,int(n*0.50)+1]/1e6, vals[v,int(n*0.95)+1]/1e6,
+              mx[v]/1e6, (sum[v]/n)/1e6, n
           }
-        }' "$IPERF"
+        }' $D/throughput_iperf3.csv
 
         printf "\n---\n\n## Throughput — HTTP download (MB/s)\n\n"
-
         awk -F, '
         NR>1 && $5!="ERR" && $5>0 {
-          v=$1; s=$5+0
-          cnt[v]++; n=cnt[v]; vals[v][n]=s
-          sum[v]+=s
+          v=$1; s=$5+0; cnt[v]++; n=cnt[v]; vals[v,n]=s; sum[v]+=s
         }
         END {
           printf "| Variant | Median | Mean | n |\n"
-          printf "|---------|--------|------|---|\n"
+          printf "|---------|-------:|-----:|--:|\n"
           for (v in cnt) {
             n=cnt[v]
             for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v][i]>vals[v][j]) { tmp=vals[v][i]; vals[v][i]=vals[v][j]; vals[v][j]=tmp }
-            med=vals[v][int(n*0.50)+1]
+              if (vals[v,i]>vals[v,j]) { tmp=vals[v,i]; vals[v,i]=vals[v,j]; vals[v,j]=tmp }
             printf "| %-8s | %.2f | %.2f | %d |\n",
-              v, med/1024/1024, (sum[v]/n)/1024/1024, n
+              v, vals[v,int(n*0.50)+1]/1024/1024, (sum[v]/n)/1024/1024, n
           }
-        }' "$HTTP"
+        }' $D/throughput_http.csv
 
         printf "\n---\n\n## Resource Usage (docker stats)\n\n"
-
-        awk -F, '
-        NR>1 {
-          printf "| %-8s | %-12s | %-8s | %-20s | %-20s |\n", $1, $2, $3, $4" "$5, $6" / "$7" "$8
-        }
-        BEGIN {
-          printf "| Variant | Phase | CPU%% | Memory (used/limit) | Net I/O (rx/tx) |\n"
-          printf "|---------|-------|------|---------------------|------------------|\n"
-        }' "$STATS"
+        printf "| Variant | Phase | CPU%% | Mem Used | Mem Limit | Net RX | Net TX |\n"
+        printf "|---------|-------|------:|---------:|----------:|-------:|-------:|\n"
+        awk -F, 'NR>1 {
+          printf "| %-8s | %-12s | %-6s | %-10s | %-10s | %-8s | %-8s |\n",
+            $1,$2,$3,$4,$5,$6,$7
+        }' $D/container_stats.csv
 
         printf "\n---\n\n## Efficiency — Mbit/s per CPU%%\n\n"
-
-        # Join iperf3 median with stats cpu% for throughput phase, derive ratio.
-        printf "| Variant | Mbit/s (median) | CPU%% (throughput) | Mbit/s per CPU%% |\n"
-        printf "|---------|-----------------|-------------------|------------------|\n"
-        awk -F, '
-        NR>1 && $3!="ERR" && $3>0 {
-          v=$1; b=$3+0
-          cnt[v]++; vals[v][cnt[v]]=b
-        }
-        END {
-          for (v in cnt) {
-            n=cnt[v]
-            for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (vals[v][i]>vals[v][j]) { tmp=vals[v][i]; vals[v][i]=vals[v][j]; vals[v][j]=tmp }
-            medmbps[v]=vals[v][int(n*0.50)+1]/1e6
-          }
-        }
-        ENDFILE { }
-        ' "$IPERF" | sort > /tmp/bench_mbps.txt || true
-
-        # Simple efficiency table: print per variant from stats csv (throughput phase)
-        awk -F, '
-        NR>1 && $2=="throughput" {
-          v=$1
-          cpu=$3; sub(/%/,"",cpu); cpu=cpu+0
-          # read median mbps from iperf csv (re-compute inline)
-        }' "$STATS" > /dev/null
-
-        # Re-derive efficiency in one awk pass over both files
+        printf "| Variant | Mbit/s (median) | CPU%% (throughput) | Mbit/s / CPU%% |\n"
+        printf "|---------|----------------:|------------------:|---------------:|\n"
         awk -F, '
         FILENAME ~ /iperf/ && NR>1 && $3!="ERR" && $3>0 {
-          v=$1; b=$3+0
-          icnt[v]++; ivals[v][icnt[v]]=b
+          v=$1; b=$3+0; icnt[v]++; ivals[v,icnt[v]]=b
         }
         FILENAME ~ /stats/ && NR>1 && $2=="throughput" {
           v=$1; c=$3; sub(/%/,"",c); cpu[v]=c+0
@@ -374,41 +390,45 @@
           for (v in icnt) {
             n=icnt[v]
             for (i=1;i<=n;i++) for (j=i+1;j<=n;j++)
-              if (ivals[v][i]>ivals[v][j]) { tmp=ivals[v][i]; ivals[v][i]=ivals[v][j]; ivals[v][j]=tmp }
-            med=ivals[v][int(n*0.50)+1]/1e6
-            c=cpu[v]
-            eff=(c>0) ? med/c : 0
-            printf "| %-8s | %-15.1f | %-18.1f | %-16.2f |\n", v, med, c, eff
+              if (ivals[v,i]>ivals[v,j]) { tmp=ivals[v,i]; ivals[v,i]=ivals[v,j]; ivals[v,j]=tmp }
+            med=ivals[v,int(n*0.50)+1]/1e6
+            c=cpu[v]; eff=(c>0)?med/c:0
+            printf "| %-8s | %15.1f | %17.1f | %14.2f |\n", v, med, c, eff
           }
-        }' "$IPERF" "$STATS"
+        }' $D/throughput_iperf3.csv $D/container_stats.csv
 
-        printf "\n---\n\n*Report generated by ansible/bench.yml — cfwarp-cli benchmark suite*\n"
-
-        } > "$REPORT"
-
-        echo "Report written: $REPORT"
-      register: _report_gen
+        printf "\n---\n\n*Generated by ansible/bench.yml — cfwarp-cli*\n"
+        } > $D/report.md && echo "OK: $D/report.md"
+      register: _report
       changed_when: false
 
-    - name: Show report path and inline summary
+    - name: Fetch results to localhost
+      ansible.builtin.fetch:
+        src: "/tmp/bench-{{ bench_ts }}/{{ item }}"
+        dest: "{{ playbook_dir }}/../bench-results/{{ item | regex_replace('(.*)\\.(.+)', '\\1_' + bench_ts + '.\\2') }}"
+        flat: true
+      loop:
+        - latency.csv
+        - throughput_iperf3.csv
+        - throughput_http.csv
+        - container_stats.csv
+        - report.md
+
+    - name: Print report
+      ansible.builtin.shell: cat /tmp/bench-{{ bench_ts }}/report.md
+      register: _rpt
+      changed_when: false
+
+    - name: Show report
       ansible.builtin.debug:
-        msg: |
-          {{ _report_gen.stdout }}
-
-          ── Latency (p50 / p95 / p99 ms) ──────────────────────────────
-          {{ lookup('pipe', 'awk -F, \'NR>1 && $3!="ERR"{v=$1;t=$3+0;cnt[v]++;vals[v][cnt[v]]=t}END{for(v in cnt){n=cnt[v];for(i=1;i<=n;i++)for(j=i+1;j<=n;j++)if(vals[v][i]>vals[v][j]){tmp=vals[v][i];vals[v][i]=vals[v][j];vals[v][j]=tmp};printf "  %-8s  p50=%.1fms  p95=%.1fms  p99=%.1fms\\n",v,vals[v][int(n*0.50)+1],vals[v][int(n*0.95)+1],vals[v][int(n*0.99)+1]}}\' ' + results_dir + '/latency_' + bench_ts + '.csv') }}
-
-          ── iperf3 throughput (Mbit/s median) ─────────────────────────
-          {{ lookup('pipe', 'awk -F, \'NR>1 && $3!="ERR" && $3>0{v=$1;b=$3+0;cnt[v]++;vals[v][cnt[v]]=b}END{for(v in cnt){n=cnt[v];for(i=1;i<=n;i++)for(j=i+1;j<=n;j++)if(vals[v][i]>vals[v][j]){tmp=vals[v][i];vals[v][i]=vals[v][j];vals[v][j]=tmp};printf "  %-8s  %.1f Mbit/s\\n",v,vals[v][int(n*0.50)+1]/1e6}}\' ' + results_dir + '/throughput_iperf3_' + bench_ts + '.csv') }}
-
-          ── HTTP download (MB/s median) ────────────────────────────────
-          {{ lookup('pipe', 'awk -F, \'NR>1 && $5!="ERR" && $5>0{v=$1;s=$5+0;cnt[v]++;vals[v][cnt[v]]=s}END{for(v in cnt){n=cnt[v];for(i=1;i<=n;i++)for(j=i+1;j<=n;j++)if(vals[v][i]>vals[v][j]){tmp=vals[v][i];vals[v][i]=vals[v][j];vals[v][j]=tmp};printf "  %-8s  %.2f MB/s\\n",v,vals[v][int(n*0.50)+1]/1024/1024}}\' ' + results_dir + '/throughput_http_' + bench_ts + '.csv') }}
+        msg: "{{ _rpt.stdout }}"
 
 
-# ── Play 3: Teardown bench_server containers ──────────────────────────────────
-- name: Teardown benchmark server containers on bench_server
+# ── Play 5: Teardown laxhd ────────────────────────────────────────────────────
+- name: "5 · Teardown bench servers on laxhd"
   hosts: bench_server
   gather_facts: false
+  tags: [teardown]
 
   tasks:
     - name: Remove bench containers
