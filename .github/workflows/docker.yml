@@ -6,6 +6,17 @@ on:
       - main
     tags:
       - "v*"
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.debian'
+      - 'docker/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'main.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
 
 jobs:
   build-push:
