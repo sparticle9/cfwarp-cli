@@ -96,6 +96,31 @@ func TestRegister_Success(t *testing.T) {
 	}
 }
 
+func TestRegister_PrefersUsablePeerEndpoint(t *testing.T) {
+	resp := successResponse()
+	resp["config"].(map[string]any)["peers"] = []any{
+		map[string]any{
+			"public_key": "peerPubKey==",
+			"endpoint": map[string]any{
+				"v4":    "162.159.192.7:0",
+				"v6":    "[2606:4700:d0::a29f:c007]:0",
+				"host":  "engage.cloudflareclient.com:2408",
+				"ports": []any{2408, 500, 1701, 4500},
+			},
+		},
+	}
+	srv := newMockServer(t, http.StatusOK, resp)
+	defer srv.Close()
+
+	result, err := testClient(srv.URL).Register(context.Background(), "myPubKey==")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if result.PeerEndpoint != "engage.cloudflareclient.com:2408" {
+		t.Fatalf("expected usable peer endpoint, got %q", result.PeerEndpoint)
+	}
+}
+
 func TestRegister_201Created(t *testing.T) {
 	srv := newMockServer(t, http.StatusCreated, successResponse())
 	defer srv.Close()
@@ -205,7 +230,7 @@ func TestRegister_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err = testClient("http://" + ln.Addr().String()).Register(ctx, "pubkey==")
+	_, err = testClient("http://"+ln.Addr().String()).Register(ctx, "pubkey==")
 	if err == nil {
 		t.Fatal("expected error on timeout/context cancellation")
 	}

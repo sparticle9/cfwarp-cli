@@ -5,10 +5,12 @@
 
   vars:
     image: "ghcr.io/sparticle9/cfwarp-cli:main"
+    pull_image: true
     container_name: cfwarp
-    proxy_port: "1080"
+    proxy_port: "18080"
     data_volume: cfwarp-data
     compose_dir: /opt/cfwarp-cli
+    state_dir: /home/cfwarp/.local/state/cfwarp-cli
 
   tasks:
     - name: Ensure compose directory exists
@@ -34,8 +36,9 @@
                 CFWARP_LISTEN_PORT: "1080"
                 CFWARP_PROXY_MODE: "socks5"
                 CFWARP_LOG_LEVEL: "info"
+                CFWARP_STATE_DIR: "{{ state_dir }}"
               volumes:
-                - {{ data_volume }}:/var/lib/cfwarp-cli
+                - {{ data_volume }}:{{ state_dir }}
           volumes:
             {{ data_volume }}:
 
@@ -44,11 +47,12 @@
         name: "{{ image }}"
         source: pull
         force_source: true
+      when: pull_image | bool
 
     - name: Deploy with docker compose (up -d)
       community.docker.docker_compose_v2:
         project_src: "{{ compose_dir }}"
-        pull: always
+        pull: "{{ 'always' if pull_image | bool else 'never' }}"
         state: present
 
     - name: Wait for proxy port to accept connections (up to 90s)

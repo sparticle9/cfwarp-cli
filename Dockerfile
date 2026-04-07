@@ -39,15 +39,20 @@ RUN apk add --no-cache curl ca-certificates && \
 FROM alpine:${ALPINE_VERSION}
 ARG ALPINE_VERSION
 
-RUN apk add --no-cache ca-certificates && \
-    adduser -D -u 1000 -g cfwarp cfwarp
+RUN apk add --no-cache ca-certificates gcompat && \
+    adduser -D -u 1000 -g cfwarp cfwarp && \
+    mkdir -p /home/cfwarp/.local/state/cfwarp-cli && \
+    chown -R cfwarp:cfwarp /home/cfwarp
+
+ENV HOME=/home/cfwarp \
+    CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli
 
 COPY --from=builder  /out/cfwarp-cli      /usr/local/bin/cfwarp-cli
 COPY --from=singbox  /out/sing-box        /usr/local/bin/sing-box
 COPY docker/entrypoint.sh                 /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-VOLUME /var/lib/cfwarp-cli
+VOLUME /home/cfwarp/.local/state/cfwarp-cli
 EXPOSE 1080
 USER cfwarp
 ENTRYPOINT ["/entrypoint.sh"]

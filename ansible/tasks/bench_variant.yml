@@ -34,7 +34,7 @@
   ansible.builtin.shell: |
     docker run --rm \
       --network container:cfwarp-bench-{{ variant.name }} \
-      alpine ping -c1 -W3 {{ _bench_host }} >/dev/null 2>&1
+      alpine ping -c1 -W3 {{ _bench_ip }} >/dev/null 2>&1
   register: _tunnel_ready
   retries: "{{ (tunnel_wait_sec | int // 3) }}"
   delay: 3
@@ -45,7 +45,7 @@
   ansible.builtin.shell: |
     docker run --rm \
       --network container:cfwarp-bench-{{ variant.name }} \
-      alpine ping -c5 -W3 {{ _bench_host }} >/dev/null 2>&1
+      alpine ping -c5 -W3 {{ _bench_ip }} >/dev/null 2>&1
   changed_when: false
   failed_when: false
 
@@ -56,7 +56,7 @@
       --network container:cfwarp-bench-{{ variant.name }} \
       alpine sh -c '
         for i in $(seq 1 {{ runs_lat }}); do
-          rtt=$(ping -c1 -W5 {{ _bench_host }} 2>/dev/null \
+          rtt=$(ping -c1 -W5 {{ _bench_ip }} 2>/dev/null \
                 | grep "time=" | sed "s/.*time=//;s/ ms//")
           echo "{{ variant.name }},${i},${rtt:-ERR}"
         done
@@ -104,7 +104,7 @@
     docker run --rm \
       --network container:cfwarp-bench-{{ variant.name }} \
       networkstatic/iperf3 \
-      -c {{ _bench_host }} -p {{ iperf3_port }} \
+      -c {{ _bench_ip }} -p {{ iperf3_port }} \
       -t {{ iperf3_duration }} \
       -P {{ iperf3_parallel }} \
       --json 2>/dev/null \
@@ -162,7 +162,7 @@
       -sS -o /dev/null \
       --max-time 300 \
       --write-out "%{time_total},%{size_download},%{speed_download},%{http_code}" \
-      "http://{{ _bench_host }}:{{ nginx_port }}/data.bin"
+      "http://{{ _bench_ip }}:{{ nginx_port }}/data.bin"
   register: _http_runs
   loop: "{{ range(1, runs_thr | int + 1) | list }}"
   loop_control:

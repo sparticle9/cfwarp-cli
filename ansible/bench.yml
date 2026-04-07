@@ -159,6 +159,9 @@
     results_dir: "{{ playbook_dir }}/../bench-results"
 
     _bench_host:  "{{ groups['bench_server'][0] }}"
+    # Resolve the actual IP from SSH config so containers can reach it by IP
+    # (SSH aliases are not DNS-resolvable inside Docker network namespaces)
+    _bench_ip:    "{{ lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0] + \" | awk '/^hostname /{print $2}'\") }}"
     iperf3_port:  "{{ hostvars[groups['bench_server'][0]]['iperf3_port'] }}"
     nginx_port:   "{{ hostvars[groups['bench_server'][0]]['nginx_port'] }}"
 
@@ -206,8 +209,10 @@
       ansible.builtin.shell: |
         docker run --rm \
           -v {{ state_volume }}:/home/cfwarp/.local/state/cfwarp-cli \
-          --entrypoint /usr/local/bin/cfwarp-cli \
-          {{ cfwarp_image_alpine }} register
+          -e CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli \
+          --entrypoint cfwarp-cli \
+          {{ cfwarp_image_alpine }} \
+          register --state-dir /home/cfwarp/.local/state/cfwarp-cli
       when: _vol_check.rc != 0
 
     - name: Run all measurements for each cfwarp variant

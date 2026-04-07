@@ -5,8 +5,9 @@ services:
     environment:
       CFWARP_LISTEN_HOST: "0.0.0.0"
       CFWARP_LISTEN_PORT: "1080"
+      CFWARP_STATE_DIR: "/home/cfwarp/.local/state/cfwarp-cli"
     volumes:
-      - cfwarp-data:/var/lib/cfwarp-cli
+      - cfwarp-data:/home/cfwarp/.local/state/cfwarp-cli
 
   app:
     image: curlimages/curl:latest

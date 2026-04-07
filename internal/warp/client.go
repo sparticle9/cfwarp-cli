@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"time"
 )
 
 const (
 	defaultBaseURL   = "https://api.cloudflareclient.com"
+	defaultPeerPort  = 2408
 	registrationPath = "/v0a2158/reg"
 	userAgent        = "okhttp/3.12.1"
 	cfClientVersion  = "a-6.3-2158"
@@ -46,8 +49,8 @@ type registrationRequest struct {
 
 // registrationResponse is the subset of the WARP API response we care about.
 type registrationResponse struct {
-	ID    string `json:"id"`
-	Token string `json:"token"`
+	ID      string `json:"id"`
+	Token   string `json:"token"`
 	Account struct {
 		License string `json:"license"`
 	} `json:"account"`
@@ -57,9 +60,10 @@ type registrationResponse struct {
 		Peers    []struct {
 			PublicKey string `json:"public_key"`
 			Endpoint  struct {
-				V4   string `json:"v4"`
-				V6   string `json:"v6"`
-				Host string `json:"host"`
+				V4    string `json:"v4"`
+				V6    string `json:"v6"`
+				Host  string `json:"host"`
+				Ports []int  `json:"ports"`
 			} `json:"endpoint"`
 		} `json:"peers"`
 		Interface struct {
@@ -73,13 +77,13 @@ type registrationResponse struct {
 
 // RegistrationResult is the parsed outcome of a successful registration call.
 type RegistrationResult struct {
-	AccountID    string
-	Token        string
-	License      string
-	ClientID     string
-	Reserved     [3]int
+	AccountID     string
+	Token         string
+	License       string
+	ClientID      string
+	Reserved      [3]int
 	PeerPublicKey string
-	PeerEndpoint  string // "host:port" from config.peers[0].endpoint.v4, fallback to host
+	PeerEndpoint  string // usable "host:port" derived from the registration peer endpoint fields
 	IPv4          string
 	IPv6          string
 }
@@ -129,10 +133,7 @@ func (c *Client) Register(ctx context.Context, publicKey string) (RegistrationRe
 	}
 
 	peer := parsed.Config.Peers[0]
-	peerEndpoint := peer.Endpoint.V4
-	if peerEndpoint == "" {
-		peerEndpoint = peer.Endpoint.Host
-	}
+	peerEndpoint := selectPeerEndpoint(peer.Endpoint.Host, peer.Endpoint.V4, peer.Endpoint.V6, peer.Endpoint.Ports)
 
 	return RegistrationResult{
 		AccountID:     parsed.ID,
@@ -145,6 +146,42 @@ func (c *Client) Register(ctx context.Context, publicKey string) (RegistrationRe
 		IPv4:          parsed.Config.Interface.Addresses.V4,
 		IPv6:          parsed.Config.Interface.Addresses.V6,
 	}, nil
+}
+
+func selectPeerEndpoint(host, ipv4, ipv6 string, ports []int) string {
+	for _, candidate := range []string{host, ipv4, ipv6} {
+		if normalized := normalizePeerEndpoint(candidate, ports); normalized != "" {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func normalizePeerEndpoint(raw string, fallbackPorts []int) string {
+	if raw == "" {
+		return ""
+	}
+
+	host, portStr, err := net.SplitHostPort(raw)
+	if err != nil {
+		return net.JoinHostPort(raw, strconv.Itoa(firstPositivePort(fallbackPorts)))
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 {
+		port = firstPositivePort(fallbackPorts)
+	}
+
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func firstPositivePort(ports []int) int {
+	for _, port := range ports {
+		if port > 0 {
+			return port
+		}
+	}
+	return defaultPeerPort
 }
 
 func validateResponse(r registrationResponse) error {
