@@ -126,6 +126,14 @@ def common_variants(*sections: dict[str, Any]) -> list[str]:
     return sorted(keys or [])
 
 
+def pick_best(label_to_value: dict[str, float], mode: str = "max") -> tuple[str, float] | None:
+    clean = {k: v for k, v in label_to_value.items() if v is not None and not math.isnan(v)}
+    if not clean:
+        return None
+    key = max(clean, key=clean.get) if mode == "max" else min(clean, key=clean.get)
+    return key, clean[key]
+
+
 def collect_latency(rows: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {"success": [], "errors": 0})
     for row in rows:
@@ -301,6 +309,42 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
     lines.append("---")
     lines.append("")
 
+    lines.append("## Executive summary")
+    lines.append("")
+    shared = common_variants(latency, iperf3, http)
+    if shared:
+        best_latency = pick_best({v: mean(latency[v]["success"]) for v in shared}, mode="min")
+        best_iperf3 = pick_best({v: percentile(iperf3[v]["upload"], 0.50) / 1e6 if iperf3[v]["upload"] else float("nan") for v in shared}, mode="max")
+        best_http = pick_best({v: mean(http[v]["speed_bps"]) / (1024**2) if http[v]["speed_bps"] else float("nan") for v in shared}, mode="max")
+        best_mem = pick_best({
+            v: max(
+                stats.get((v, "iperf3"), {}).get("mem_max_bytes", float("nan")),
+                stats.get((v, "http"), {}).get("mem_max_bytes", float("nan")),
+            )
+            for v in shared
+        }, mode="min")
+        if best_latency:
+            lines.append(f"- Lowest mean RTT: **{best_latency[0]}** at **{best_latency[1]:.1f} ms**")
+        if best_iperf3:
+            lines.append(f"- Highest raw upload throughput: **{best_iperf3[0]}** at **{best_iperf3[1]:.1f} Mbit/s** median")
+        if best_http:
+            lines.append(f"- Highest large-download throughput: **{best_http[0]}** at **{best_http[1]:.2f} MB/s** mean")
+        if best_mem:
+            lines.append(f"- Lowest raw-path memory footprint: **{best_mem[0]}** at **{human_bytes(best_mem[1])}** peak")
+    if k6:
+        lines.append("- API-like workload winners by p95 latency:")
+        for profile in sorted({p for by_variant in k6.values() for p in by_variant.keys()}):
+            best = pick_best({
+                variant: mean([row["p95_ms"] for row in profiles.get(profile, []) if row["p95_ms"] is not None])
+                for variant, profiles in k6.items()
+            }, mode="min")
+            if best:
+                lines.append(f"  - **{profile}**: {best[0]} at **{best[1]:.1f} ms** p95")
+    lines.append("- CPU and memory below are measured from the **benchmarked tunnel container cgroup only**, not from helper load-generator containers.")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
     lines.append("## Latency — ping RTT through WireGuard tunnel (ms)")
     lines.append("")
     lines.append("| Variant | p50 | p95 | p99 | Mean | StdDev | Success | Errors |")
@@ -362,8 +406,8 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
 
     lines.append("## API-like workload — k6 summary")
     lines.append("")
-    lines.append("| Variant | Profile | VUs | RPS | Error Rate | p50 ms | p95 ms | p99 ms | Max ms | Waiting p95 | Connect p95 | Iter p95 |")
-    lines.append("|---------|---------|---:|----:|-----------:|-------:|-------:|-------:|------:|------------:|------------:|---------:|")
+    lines.append("| Variant | Profile | VUs | RPS | Error Rate | p50 ms | p95 ms | p99 ms | Max ms | Waiting p95 | Connect p95 | Iter p95 | CPU Mean % | CPU Max % | Mem Peak |")
+    lines.append("|---------|---------|---:|----:|-----------:|-------:|-------:|-------:|------:|------------:|------------:|---------:|-----------:|----------:|---------:|")
     for variant in sorted(k6):
         for profile in sorted(k6[variant]):
             rows = k6[variant][profile]
@@ -377,9 +421,33 @@ def build_markdown(args: argparse.Namespace, latency: dict[str, Any], iperf3: di
             conns = [r['connect_p95_ms'] for r in rows if r['connect_p95_ms'] is not None]
             iters = [r['iteration_p95_ms'] for r in rows if r['iteration_p95_ms'] is not None]
             vus = rows[0]['vus'] if rows else None
+            phase_stats = stats.get((variant, f"k6-{profile}"), {})
             lines.append(
-                f"| {variant:<8} | {profile:<7} | {safe_fmt(vus, digits=0)} | {safe_fmt(mean(rps))} | {safe_fmt(mean(err), digits=3)} | {safe_fmt(mean(p50s))} | {safe_fmt(mean(p95s))} | {safe_fmt(mean(p99s))} | {safe_fmt(mean(maxs))} | {safe_fmt(mean(waits))} | {safe_fmt(mean(conns))} | {safe_fmt(mean(iters))} |"
+                f"| {variant:<8} | {profile:<7} | {safe_fmt(vus, digits=0)} | {safe_fmt(mean(rps))} | {safe_fmt(mean(err), digits=3)} | {safe_fmt(mean(p50s))} | {safe_fmt(mean(p95s))} | {safe_fmt(mean(p99s))} | {safe_fmt(mean(maxs))} | {safe_fmt(mean(waits))} | {safe_fmt(mean(conns))} | {safe_fmt(mean(iters))} | {safe_fmt(phase_stats.get('cpu_mean', float('nan')), digits=2)} | {safe_fmt(phase_stats.get('cpu_max', float('nan')), digits=2)} | {human_bytes(phase_stats.get('mem_max_bytes', float('nan')))} |"
             )
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    lines.append("## Resource summary")
+    lines.append("")
+    lines.append("| Variant | Raw path CPU Mean % | Raw path CPU Max % | Raw path Mem Peak | API suite CPU Mean % | API suite CPU Max % | API suite Mem Peak |")
+    lines.append("|---------|--------------------:|-------------------:|------------------:|--------------------:|-------------------:|-------------------:|")
+    for variant in sorted(set(v for v, _ in stats.keys())):
+        raw_entries = [stats[(v, phase)] for (v, phase) in stats if v == variant and phase in {"latency", "iperf3", "http"}]
+        api_entries = [stats[(v, phase)] for (v, phase) in stats if v == variant and phase.startswith("k6-")]
+        raw_cpu_mean = mean([e["cpu_mean"] for e in raw_entries if not math.isnan(e["cpu_mean"])]) if raw_entries else float("nan")
+        raw_cpu_max = max([e["cpu_max"] for e in raw_entries if not math.isnan(e["cpu_max"])], default=float("nan"))
+        raw_mem_peak = max([e["mem_max_bytes"] for e in raw_entries if not math.isnan(e["mem_max_bytes"])], default=float("nan"))
+        api_cpu_mean = mean([e["cpu_mean"] for e in api_entries if not math.isnan(e["cpu_mean"])]) if api_entries else float("nan")
+        api_cpu_max = max([e["cpu_max"] for e in api_entries if not math.isnan(e["cpu_max"])], default=float("nan"))
+        api_mem_peak = max([e["mem_max_bytes"] for e in api_entries if not math.isnan(e["mem_max_bytes"])], default=float("nan"))
+        lines.append(
+            f"| {variant:<8} | {safe_fmt(raw_cpu_mean, digits=2)} | {safe_fmt(raw_cpu_max, digits=2)} | {human_bytes(raw_mem_peak)} | {safe_fmt(api_cpu_mean, digits=2)} | {safe_fmt(api_cpu_max, digits=2)} | {human_bytes(api_mem_peak)} |"
+        )
+    lines.append("")
+    lines.append("- **Raw path** = latency + iperf3 + large HTTP download phases.")
+    lines.append("- **API suite** = k6 small/medium/upload/stream phases.")
     lines.append("")
     lines.append("---")
     lines.append("")
