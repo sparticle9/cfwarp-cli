@@ -35,11 +35,11 @@
 
 # Shared vars referenced across plays via hostvars
 # bench_ts:   set in play 3, must be passed with -e if running report standalone
-# bench_ip:   resolved in play 2, stored in tyo hostvars
+# bench_ip:   resolved in play 2, stored on the proxy host facts
 
 
-# ── Play 1: Server containers on laxhd ───────────────────────────────────────
-- name: "1 · Setup bench servers on laxhd"
+# ── Play 1: Server containers on benchmark host ──────────────────────────────
+- name: "1 · Setup benchmark target services"
   hosts: bench_server
   gather_facts: false
   tags: [servers]
@@ -179,11 +179,11 @@
 
     - name: Report ports
       ansible.builtin.debug:
-        msg: "laxhd  iperf3={{ iperf3_port }}  nginx={{ nginx_port }}  httpbin={{ api_port }}"
+        msg: "bench_target iperf3={{ iperf3_port }} nginx={{ nginx_port }} httpbin={{ api_port }}"
 
 
-# ── Play 2: Prepare tyo ───────────────────────────────────────────────────────
-- name: "2 · Prepare warp proxy host (tyo)"
+# ── Play 2: Prepare proxy host ───────────────────────────────────────────────
+- name: "2 · Prepare proxy host"
   hosts: warp
   gather_facts: false
   tags: [prepare]
@@ -246,7 +246,7 @@
         dest: /tmp/k6_api.js
         mode: "0644"
 
-    - name: Resolve laxhd IP for container-internal use
+    - name: Resolve benchmark target IP for container-internal use
       ansible.builtin.set_fact:
         bench_ip: "{{ hostvars[groups['bench_server'][0]].get('ansible_host',
                     lookup('pipe', 'ssh -G ' + groups[\"bench_server\"][0]
@@ -565,8 +565,8 @@
         msg: "{{ _rpt.stdout }}"
 
 
-# ── Play 5: Teardown laxhd ────────────────────────────────────────────────────
-- name: "5 · Teardown bench servers on laxhd"
+# ── Play 5: Teardown benchmark host services ─────────────────────────────────
+- name: "5 · Teardown benchmark target services"
   hosts: bench_server
   gather_facts: false
   tags: [teardown]

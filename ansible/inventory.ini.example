@@ -1,12 +1,11 @@
 # inventory.ini.example — copy to inventory.ini and fill in your hosts.
 #
-# Host names are resolved via ~/.ssh/config — no need to specify
-# ansible_host / ansible_user / ansible_port here if SSH config handles them.
-# Add ansible_user= only if your SSH config does not set a User directive.
+# Host aliases can be resolved through your local SSH configuration, so you do not
+# need to repeat ansible_host / ansible_user / ansible_port here if that is already
+# handled outside the repo.
 
 # ── WARP proxy hosts under test ───────────────────────────────────────────────
 # Define one or more hosts that will run the tunnel/proxy containers being compared.
-# Host aliases should match entries in your ~/.ssh/config.
 [warp]
 proxy-host-1
 # proxy-host-2
@@ -17,7 +16,6 @@ ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
 # ── Benchmark target server ───────────────────────────────────────────────────
 # Define exactly one host that serves as the remote benchmark target. bench.yml
 # will run iperf3 + static HTTP + API-like HTTP endpoints on this machine.
-# Host aliases should match entries in your ~/.ssh/config.
 [bench_server]
 bench-target-1
 
