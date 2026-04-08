@@ -36,7 +36,7 @@
   - Add automated tests for SOCKS TCP/UDP behavior, HTTP CONNECT flows, plain HTTP proxying, auth/no-auth variants, and listener failure paths using fake packet transports.
   - Requirements/design refs: frontends/service modes, data-plane tests, official `warp-cli`-inspired mode separation.
 
-- [ ] 7. Port the Cloudflare MASQUE registration and enrollment control-plane flow.
+- [x] 7. Port the Cloudflare MASQUE registration and enrollment control-plane flow.
   - Add Cloudflare API code that performs consumer registration, MASQUE key enrollment, and persistence into the new MASQUE-specific account state fields.
   - Parse endpoint and key material robustly instead of reusing WireGuard-specific field assumptions.
   - Add tests for success, malformed responses, token errors, overwrite/import behavior, and state persistence.
