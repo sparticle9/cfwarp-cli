@@ -25,15 +25,19 @@ import (
 )
 
 const (
-	DefaultSNI            = "consumer-masque.cloudflareclient.com"
-	DefaultConnectURI     = "https://cloudflareaccess.com"
-	defaultConnectPort    = 443
-	defaultInitialPktSize = 1242
-	defaultKeepAlive      = 30 * time.Second
-	defaultReconnectDelay = time.Second
-	cfConnectProtocol     = "cf-connect-ip"
-	settingsH3Datagram00  = 0x276
+	DefaultSNI             = "consumer-masque.cloudflareclient.com"
+	DefaultConnectURI      = "https://cloudflareaccess.com"
+	defaultConnectPort     = 443
+	defaultInitialPktSize  = 1242
+	defaultKeepAlive       = 30 * time.Second
+	defaultReconnectDelay  = time.Second
+	defaultStartupAttempts = 5
+	maxStartupBackoff      = 5 * time.Second
+	cfConnectProtocol      = "cf-connect-ip"
+	settingsH3Datagram00   = 0x276
 )
+
+var connectTunnelFunc = connectTunnel
 
 // packetSession abstracts the session operations needed by the tunnel.
 type packetSession interface {
@@ -84,7 +88,7 @@ func (Transport) Start(ctx context.Context, cfg transport.StartConfig) (transpor
 		pendingReads: make(chan []byte, 8),
 		events:       make(chan transport.Event, 16),
 	}
-	bund, err := tun.dial(ctx)
+	bund, err := tun.dialWithRetry(ctx, defaultStartupAttempts)
 	if err != nil {
 		return nil, err
 	}
@@ -227,21 +231,61 @@ func (t *tunnel) setBundle(b *sessionBundle) {
 
 func (t *tunnel) reconnect(cause error) error {
 	t.emit("warn", "reconnect", cause.Error())
-	t.mu.RLock()
-	delay := t.cfg.Masque.ReconnectDelay
-	t.mu.RUnlock()
-	select {
-	case <-time.After(delay):
-	case <-t.ctx.Done():
-		return t.ctx.Err()
-	}
-	bund, err := t.dial(t.ctx)
+	bund, err := t.dialWithRetry(t.ctx, defaultStartupAttempts)
 	if err != nil {
 		return fmt.Errorf("reconnect MASQUE tunnel: %w", err)
 	}
 	t.setBundle(bund)
 	t.emit("info", "reconnected", "MASQUE tunnel re-established")
 	return nil
+}
+
+func (t *tunnel) dialWithRetry(ctx context.Context, attempts int) (*sessionBundle, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		bund, err := t.dial(ctx)
+		if err == nil {
+			return bund, nil
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		backoff := t.startupBackoff(attempt)
+		t.emit("warn", "retry", fmt.Sprintf("MASQUE dial attempt %d/%d failed: %v; retrying in %s", attempt, attempts, err, backoff))
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("MASQUE dial failed")
+	}
+	return nil, lastErr
+}
+
+func (t *tunnel) startupBackoff(attempt int) time.Duration {
+	delay := t.cfg.Masque.ReconnectDelay
+	if delay <= 0 {
+		delay = defaultReconnectDelay
+	}
+	if delay < 2*time.Second {
+		delay = 2 * time.Second
+	}
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= maxStartupBackoff {
+			return maxStartupBackoff
+		}
+	}
+	if delay > maxStartupBackoff {
+		return maxStartupBackoff
+	}
+	return delay
 }
 
 func (t *tunnel) dial(ctx context.Context) (*sessionBundle, error) {
@@ -270,7 +314,7 @@ func (t *tunnel) dial(ctx context.Context) (*sessionBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	udpConn, h3t, ipConn, err := connectTunnel(ctx, tlsConfig, quicConfig, t.cfg.Masque.ConnectURI, endpoint)
+	udpConn, h3t, ipConn, err := connectTunnelFunc(ctx, tlsConfig, quicConfig, t.cfg.Masque.ConnectURI, endpoint)
 	if err != nil {
 		return nil, err
 	}
