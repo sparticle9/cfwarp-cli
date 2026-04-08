@@ -31,12 +31,28 @@ type Stats struct {
 	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
 }
 
+// MasqueConfig contains MASQUE-specific startup inputs.
+type MasqueConfig struct {
+	PrivateKeyDERBase64 string
+	EndpointPubKeyPEM   string
+	EndpointV4          string
+	EndpointV6          string
+	ConnectURI          string
+	SNI                 string
+	ConnectPort         int
+	UseIPv6             bool
+	InitialPacketSize   uint16
+	KeepAlivePeriod     time.Duration
+	ReconnectDelay      time.Duration
+}
+
 // StartConfig contains transport-agnostic startup inputs. Concrete transports
 // may interpret the fields differently, but the packet tunnel contract remains shared.
 type StartConfig struct {
 	MTU              int
 	EndpointOverride string
 	Addresses        []netip.Prefix
+	Masque           *MasqueConfig
 }
 
 // PacketTunnel is the shared packet-oriented seam between transports and the data plane.

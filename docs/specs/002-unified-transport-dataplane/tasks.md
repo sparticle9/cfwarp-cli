@@ -42,7 +42,7 @@
   - Add tests for success, malformed responses, token errors, overwrite/import behavior, and state persistence.
   - Requirements/design refs: native MASQUE transport responsibilities, `usque` reference inputs, error handling.
 
-- [ ] 8. Implement the native MASQUE transport package.
+- [x] 8. Implement the native MASQUE transport package.
   - Port the MASQUE-specific TLS client auth, endpoint public-key pinning, QUIC/H3 session setup, Cloudflare-specific CONNECT-IP quirks, reconnect logic, and packet tunnel implementation into `internal/transport/masque`.
   - Reuse shared packet/event/stats types from the transport abstraction rather than embedding CLI or proxy concerns.
   - Add tests for TLS setup, endpoint pin mismatch, reconnect loop behavior, transport close semantics, and packet read/write behavior with deterministic fakes where possible.
