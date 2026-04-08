@@ -18,7 +18,7 @@
   - Add tests for status transitions (`idle`, `connecting`, `connected`, `degraded`, `stopped`) and stale runtime cleanup across external and native runtimes.
   - Requirements/design refs: runtime state, control-plane service model, error handling.
 
-- [ ] 4. Define the packet transport abstraction and test doubles for native transports.
+- [x] 4. Define the packet transport abstraction and test doubles for native transports.
   - Create the `PacketTransport` / `PacketTunnel` interfaces and any shared event/stats types needed by the orchestrator and data plane.
   - Add fake transports/tunnels for deterministic unit tests without real network dependency.
   - Add tests that verify the abstraction supports MTU/address reporting, packet read/write, close behavior, and event delivery.
