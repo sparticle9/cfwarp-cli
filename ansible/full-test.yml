@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ansible-playbook -i inventory.ini ansible/full-test.yml
-#   ansible-playbook -i inventory.ini ansible/full-test.yml -l proxy-host-1 \
+#   ansible-playbook -i inventory.ini ansible/full-test.yml --limit warp \
 #     -e cfwarp_image=ghcr.io/sparticle9/cfwarp-cli:feat-masque \
 #     -e image_revision_expected=ebf8e8e7f200b5900571b8fb3368816ac0b29a82
 #
