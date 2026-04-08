@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 type fakeStack struct {
+	mu        sync.Mutex
 	reads     chan []byte
 	writes    [][]byte
 	readErr   error
@@ -43,11 +45,15 @@ func (f *fakeStack) WritePacket(pkt []byte) error {
 	if f.writeErr != nil {
 		return f.writeErr
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.writes = append(f.writes, append([]byte(nil), pkt...))
 	return nil
 }
 
 func (f *fakeStack) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.closed = true
 	close(f.reads)
 	return f.closeErr
@@ -69,6 +75,12 @@ func (f *fakeStack) ResolveIP(ctx context.Context, host string) ([]net.IP, error
 	return []net.IP{net.ParseIP("127.0.0.1")}, nil
 }
 
+func (f *fakeStack) WritesLen() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.writes)
+}
+
 func TestEngine_ForwardsPacketsBothWays(t *testing.T) {
 	stack := newFakeStack()
 	tun := transport.NewFakeTunnel(1280, nil)
@@ -82,12 +94,12 @@ func TestEngine_ForwardsPacketsBothWays(t *testing.T) {
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if len(tun.WrittenPackets()) == 1 && len(stack.writes) == 1 {
+		if len(tun.WrittenPackets()) == 1 && stack.WritesLen() == 1 {
 			break
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for bidirectional forwarding; tunnel writes=%v stack writes=%v", tun.WrittenPackets(), stack.writes)
+			t.Fatalf("timed out waiting for bidirectional forwarding; tunnel writes=%v stack writes=%d", tun.WrittenPackets(), stack.WritesLen())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -142,7 +154,10 @@ func TestEngine_CloseClosesStackAndTunnel(t *testing.T) {
 	if err := e.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !stack.closed {
+	stack.mu.Lock()
+	closed := stack.closed
+	stack.mu.Unlock()
+	if !closed {
 		t.Fatal("expected stack to be closed")
 	}
 	if !tun.Closed() {
