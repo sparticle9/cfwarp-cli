@@ -60,7 +60,7 @@
   - Add command tests covering help text, JSON output, idempotent updates, and backwards-compatible aliases or wrappers.
   - Requirements/design refs: control-plane runtime model, official `warp-cli` concepts, testing strategy.
 
-- [ ] 11. Keep `singbox-wireguard` working as a transitional runtime under the new architecture.
+- [x] 11. Keep `singbox-wireguard` working as a transitional runtime under the new architecture.
   - Adapt the existing `singbox-wireguard` path to the new registry, settings, and runtime-state model without forcing it into native data-plane code.
   - Ensure legacy runtime reporting still surfaces through the richer status/stats model where meaningful.
   - Add regression tests so the current WireGuard MVP behavior remains stable while native MASQUE work lands incrementally.
