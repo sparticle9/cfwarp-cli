@@ -1,0 +1,253 @@
+---
+# protocol-quick-bench.yml — lightweight protocol comparison bench on remote hosts.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini ansible/protocol-quick-bench.yml --limit warp
+#   ansible-playbook -i inventory.ini ansible/protocol-quick-bench.yml --limit warp \
+#     -e cfwarp_image=ghcr.io/sparticle9/cfwarp-cli:feat-masque \
+#     -e latency_runs=30 \
+#     -e download_runs=5
+#
+# This is intentionally lighter than the benchmark harness in ansible/bench.yml.
+# It compares the two WARP transport protocols through the same local SOCKS5 interface:
+#   - wireguard
+#   - masque
+
+- name: Quick protocol comparison bench
+  hosts: warp
+  gather_facts: false
+
+  vars:
+    cfwarp_image: "ghcr.io/sparticle9/cfwarp-cli:feat-masque"
+    image_revision_expected: ""
+    bench_root: "/tmp/cfwarp-protocol-bench"
+    bench_id: ""
+    latency_runs: 20
+    download_runs: 3
+    download_bytes: 20000000
+    startup_wait_seconds: 15
+    retry_sleep_seconds: 3
+    probe_timeout_seconds: 20
+    protocol_cases:
+      - protocol: wireguard
+        container_name: cfwarp-bench-wireguard
+        host_port: 28120
+        container_port: 1080
+        startup_attempts: 1
+        env:
+          CFWARP_LISTEN_HOST: "0.0.0.0"
+          CFWARP_LISTEN_PORT: "1080"
+          CFWARP_PROXY_MODE: "socks5"
+          CFWARP_LOG_LEVEL: "info"
+
+      - protocol: masque
+        container_name: cfwarp-bench-masque
+        host_port: 28121
+        container_port: 28081
+        startup_attempts: 8
+        env:
+          CFWARP_RUNTIME_FAMILY: "native"
+          CFWARP_TRANSPORT: "masque"
+          CFWARP_MODE: "socks5"
+          CFWARP_LISTEN_HOST: "0.0.0.0"
+          CFWARP_LISTEN_PORT: "28081"
+          CFWARP_LOG_LEVEL: "info"
+
+  tasks:
+    - name: Resolve bench id
+      ansible.builtin.set_fact:
+        bench_id_resolved: "{{ bench_id if (bench_id | length > 0) else lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+    - name: Ensure bench root exists
+      ansible.builtin.file:
+        path: "{{ bench_root }}/{{ bench_id_resolved }}"
+        state: directory
+        mode: "0755"
+
+    - name: Pull packaged image under test
+      ansible.builtin.command:
+        cmd: docker pull {{ cfwarp_image }}
+      register: docker_pull
+      changed_when: "'Image is up to date' not in docker_pull.stdout"
+
+    - name: Inspect packaged image labels
+      ansible.builtin.command:
+        cmd: docker image inspect {{ cfwarp_image }} --format {{ '"{{json .Config.Labels}}"' }}
+      register: image_labels_raw
+      changed_when: false
+
+    - name: Parse packaged image labels
+      ansible.builtin.set_fact:
+        image_labels: "{{ image_labels_raw.stdout | from_json }}"
+
+    - name: Assert packaged image revision when expected
+      ansible.builtin.assert:
+        that:
+          - image_labels['org.opencontainers.image.revision'] | default('') == image_revision_expected
+        fail_msg: >-
+          expected image revision {{ image_revision_expected }}, got
+          {{ image_labels['org.opencontainers.image.revision'] | default('unknown') }}
+        success_msg: packaged image revision matches expected commit
+      when: image_revision_expected | length > 0
+
+    - name: Run quick bench case
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        name={{ item.container_name | quote }}
+        protocol={{ item.protocol | quote }}
+        state_dir={{ (bench_root ~ '/' ~ bench_id_resolved ~ '/' ~ item.protocol ~ '-state') | quote }}
+        result_json={{ (bench_root ~ '/' ~ bench_id_resolved ~ '/' ~ item.protocol ~ '.json') | quote }}
+        host_port={{ item.host_port | quote }}
+        container_port={{ item.container_port | quote }}
+        startup_attempts={{ item.startup_attempts | int }}
+        startup_wait={{ startup_wait_seconds | int }}
+        retry_sleep={{ retry_sleep_seconds | int }}
+        probe_timeout={{ probe_timeout_seconds | int }}
+        latency_runs={{ latency_runs | int }}
+        download_runs={{ download_runs | int }}
+        download_bytes={{ download_bytes | int }}
+
+        cleanup() {
+          docker rm -f "$name" >/dev/null 2>&1 || true
+        }
+
+        trap cleanup EXIT
+
+        rm -rf "$state_dir"
+        mkdir -p "$state_dir"
+
+        attempt=1
+        while [ "$attempt" -le "$startup_attempts" ]; do
+          echo "== ${protocol} / startup attempt ${attempt} =="
+          cleanup
+          rm -rf "$state_dir/run" "$state_dir/logs"
+          mkdir -p "$state_dir"
+
+          cid=$(docker run -d \
+            --name "$name" \
+            -p "127.0.0.1:${host_port}:${container_port}" \
+            -v "$state_dir:/home/cfwarp/.local/state/cfwarp-cli" \
+            {% for key, value in item.env.items() %}-e {{ key }}={{ value | quote }} \
+            {% endfor %}
+            {{ cfwarp_image | quote }})
+          echo "container=${cid}"
+          sleep "$startup_wait"
+
+          if curl -fsSL --max-time "$probe_timeout" --proxy "socks5h://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on$'; then
+            echo "${protocol} is ready"
+            break
+          fi
+
+          echo "${protocol} failed attempt ${attempt}"
+          docker logs "$name" || true
+          if [ -f "$state_dir/logs/backend.stderr.log" ]; then
+            echo "-- backend stderr --"
+            cat "$state_dir/logs/backend.stderr.log"
+          fi
+          attempt=$((attempt + 1))
+          if [ "$attempt" -le "$startup_attempts" ]; then
+            sleep "$retry_sleep"
+          fi
+        done
+
+        if [ "$attempt" -gt "$startup_attempts" ]; then
+          echo "failed to start protocol ${protocol} after ${startup_attempts} attempts"
+          exit 1
+        fi
+
+        tmp_latency=$(mktemp)
+        tmp_download=$(mktemp)
+
+        for _ in 1 2 3; do
+          curl -fsSL --max-time 30 --proxy "socks5h://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace >/dev/null || true
+        done
+
+        i=1
+        while [ "$i" -le "$latency_runs" ]; do
+          curl -o /dev/null -sS --max-time 30 \
+            --proxy "socks5h://127.0.0.1:${host_port}" \
+            -w '%{time_total}\n' \
+            "https://www.cloudflare.com/cdn-cgi/trace?run=${i}" >> "$tmp_latency"
+          i=$((i + 1))
+        done
+
+        i=1
+        while [ "$i" -le "$download_runs" ]; do
+          curl -o /dev/null -sS --max-time 180 \
+            --proxy "socks5h://127.0.0.1:${host_port}" \
+            -w '%{time_total} %{speed_download}\n' \
+            "https://speed.cloudflare.com/__down?bytes=${download_bytes}" >> "$tmp_download"
+          i=$((i + 1))
+        done
+
+        python3 - "$tmp_latency" "$tmp_download" {{ item.protocol | quote }} > "$result_json" <<'PY'
+        import json, pathlib, statistics, sys
+        latency_path = pathlib.Path(sys.argv[1])
+        download_path = pathlib.Path(sys.argv[2])
+        protocol = sys.argv[3]
+        lat = [float(x.strip()) for x in latency_path.read_text().splitlines() if x.strip()]
+        dls = []
+        for line in download_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            t, s = line.split()
+            dls.append((float(t), float(s)))
+        lat_sorted = sorted(lat)
+        idx95 = max(0, min(len(lat_sorted)-1, int(round(0.95 * len(lat_sorted))) - 1))
+        out = {
+            'protocol': protocol,
+            'latency_runs_s': lat,
+            'latency_ms': {
+                'min': round(min(lat) * 1000, 1),
+                'median': round(statistics.median(lat) * 1000, 1),
+                'mean': round(statistics.mean(lat) * 1000, 1),
+                'p95': round(lat_sorted[idx95] * 1000, 1),
+                'max': round(max(lat) * 1000, 1),
+            },
+            'download_runs': [
+                {
+                    'time_s': round(t, 3),
+                    'speed_Bps': round(s, 1),
+                    'speed_MiBps': round(s / 1024 / 1024, 2),
+                }
+                for t, s in dls
+            ],
+            'download_summary': {
+                'mean_MiBps': round(statistics.mean([s / 1024 / 1024 for _, s in dls]), 2),
+                'min_MiBps': round(min([s / 1024 / 1024 for _, s in dls]), 2),
+                'max_MiBps': round(max([s / 1024 / 1024 for _, s in dls]), 2),
+            },
+        }
+        print(json.dumps(out, indent=2))
+        PY
+
+        rm -f "$tmp_latency" "$tmp_download"
+        echo "wrote ${result_json}"
+      args:
+        executable: /bin/bash
+      loop: "{{ protocol_cases }}"
+      loop_control:
+        label: "{{ item.protocol }}"
+      changed_when: false
+
+    - name: Summarize quick protocol bench
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<PY
+        import json, pathlib
+        base = pathlib.Path({{ (bench_root ~ '/' ~ bench_id_resolved) | to_json }})
+        wireguard = json.loads((base / 'wireguard.json').read_text())
+        masque = json.loads((base / 'masque.json').read_text())
+        print('bench_id={{ bench_id_resolved }}')
+        for data in (wireguard, masque):
+            print(f"{data['protocol']}: median={data['latency_ms']['median']} ms, p95={data['latency_ms']['p95']} ms, mean_dl={data['download_summary']['mean_MiBps']} MiB/s")
+        PY
+      args:
+        executable: /bin/bash
+      register: protocol_bench_summary
+      changed_when: false
+
+    - name: Show quick protocol bench summary
+      ansible.builtin.debug:
+        msg: "{{ protocol_bench_summary.stdout_lines }}"
