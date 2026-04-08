@@ -68,8 +68,8 @@ func TestResolveEndpointDefaultsAndIPv6(t *testing.T) {
 		Masque: &transport.MasqueConfig{
 			PrivateKeyDERBase64: dummyPrivateKey(t),
 			EndpointPubKeyPEM:   dummyPublicKeyPEM(t),
-			EndpointV4:          "162.159.198.1",
-			EndpointV6:          "::1",
+			EndpointV4:          "162.159.198.1:0",
+			EndpointV6:          "[::1]:0",
 			UseIPv6:             true,
 		},
 	}

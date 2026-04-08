@@ -384,7 +384,7 @@ func resolveEndpoint(cfg transport.MasqueConfig, override string) (*net.UDPAddr,
 	port := cfg.ConnectPort
 	if h, p, err := net.SplitHostPort(raw); err == nil {
 		host = h
-		if portNum, err := net.LookupPort("udp", p); err == nil {
+		if portNum, err := net.LookupPort("udp", p); err == nil && portNum > 0 {
 			port = portNum
 		}
 	}
