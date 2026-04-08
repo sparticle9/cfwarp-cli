@@ -214,13 +214,17 @@ func TestLoad_FullPrecedenceChain(t *testing.T) {
 	}
 }
 
-func TestLoad_NativeRuntimeCurrentlyRejected(t *testing.T) {
+func TestLoad_NativeRuntimeSelection(t *testing.T) {
 	d := tempDirs(t)
 	t.Setenv("CFWARP_RUNTIME_FAMILY", "native")
 	t.Setenv("CFWARP_TRANSPORT", "masque")
+	t.Setenv("CFWARP_MODE", "http")
 
-	_, err := settings.Load(d, settings.Overrides{})
-	if err == nil {
-		t.Fatal("expected native runtime selection to be rejected for now")
+	s, err := settings.Load(d, settings.Overrides{})
+	if err != nil {
+		t.Fatalf("expected native runtime selection to load, got: %v", err)
+	}
+	if s.RuntimeFamily != state.RuntimeFamilyNative || s.Transport != state.TransportMasque || s.Mode != state.ModeHTTP {
+		t.Fatalf("unexpected native runtime selection: %+v", s)
 	}
 }

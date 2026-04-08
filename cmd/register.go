@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nexus/cfwarp-cli/internal/cloudflare"
 	"github.com/nexus/cfwarp-cli/internal/state"
+	masquetransport "github.com/nexus/cfwarp-cli/internal/transport/masque"
 	"github.com/nexus/cfwarp-cli/internal/warp"
 	"github.com/spf13/cobra"
 )
 
 var registerForce bool
+var registerMasque bool
 
 var registerCmd = &cobra.Command{
 	Use:   "register",
@@ -43,8 +46,8 @@ Use --force to overwrite an existing registration.`,
 		}
 
 		fmt.Fprintln(c.OutOrStdout(), "Registering with Cloudflare WARP…")
-		client := warp.NewClient()
-		result, err := client.Register(c.Context(), kp.PublicKey)
+		client := cloudflare.NewClient()
+		result, err := client.RegisterConsumer(c.Context(), kp.PublicKey)
 		if err != nil {
 			return fmt.Errorf("registration failed: %w", err)
 		}
@@ -63,6 +66,18 @@ Use --force to overwrite an existing registration.`,
 			CreatedAt:        time.Now().UTC(),
 			Source:           "register",
 		}
+		if registerMasque {
+			fmt.Fprintln(c.OutOrStdout(), "Enrolling MASQUE key…")
+			privDER, pubDER, err := masquetransport.GenerateECDSAKeypairDER()
+			if err != nil {
+				return fmt.Errorf("generate MASQUE keypair: %w", err)
+			}
+			enrollment, err := client.EnrollMasqueKey(c.Context(), result.AccountID, result.Token, pubDER, "")
+			if err != nil {
+				return fmt.Errorf("MASQUE enrollment failed: %w", err)
+			}
+			acc.Masque = cloudflare.BuildMasqueState(privDER, enrollment)
+		}
 		if err := state.SaveAccount(dirs, acc, registerForce); err != nil {
 			return fmt.Errorf("save account: %w", err)
 		}
@@ -75,4 +90,5 @@ Use --force to overwrite an existing registration.`,
 
 func init() {
 	registerCmd.Flags().BoolVar(&registerForce, "force", false, "overwrite existing registration data")
+	registerCmd.Flags().BoolVar(&registerMasque, "masque", false, "also enroll a MASQUE key and persist MASQUE transport state")
 }

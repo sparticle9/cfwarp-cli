@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 
+	_ "github.com/nexus/cfwarp-cli/internal/backend/native"
 	_ "github.com/nexus/cfwarp-cli/internal/backend/singbox"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,8 @@ func init() {
 		renderCmd,
 		upCmd,
 		downCmd,
+		connectCmd,
+		disconnectCmd,
 		statusCmd,
 		endpointCmd,
 		versionCmd,

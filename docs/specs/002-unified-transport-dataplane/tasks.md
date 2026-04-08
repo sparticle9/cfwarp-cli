@@ -48,7 +48,7 @@
   - Add tests for TLS setup, endpoint pin mismatch, reconnect loop behavior, transport close semantics, and packet read/write behavior with deterministic fakes where possible.
   - Requirements/design refs: native MASQUE transport, transport tests, migration summary step 4.
 
-- [ ] 9. Integrate the native runtime family into the control plane and add MASQUE-first mode selection.
+- [x] 9. Integrate the native runtime family into the control plane and add MASQUE-first mode selection.
   - Wire the orchestrator so `runtime_family=native` + `transport=masque` + `mode=socks5|http` starts the shared engine and frontend listeners through the local runtime service.
   - Add validation and capability checks so unsupported combinations fail clearly before runtime startup.
   - Add command and integration tests for `connect`, `disconnect`, `status --json`, and compatibility wrappers from `up/down` when native MASQUE is selected.

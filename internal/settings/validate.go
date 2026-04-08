@@ -61,17 +61,22 @@ func Validate(s state.Settings) error {
 		}
 	}
 
-	supportedModes := []string{state.ModeSocks5, state.ModeHTTP}
+	supportedProxyModes := []string{state.ModeSocks5, state.ModeHTTP}
 	switch s.RuntimeFamily {
 	case state.RuntimeFamilyLegacy:
 		if s.Transport != state.TransportWireGuard {
 			return fmt.Errorf("invalid transport %q for runtime_family %q: must be %q", s.Transport, s.RuntimeFamily, state.TransportWireGuard)
 		}
 		if s.Mode != state.ModeSocks5 && s.Mode != state.ModeHTTP {
-			return fmt.Errorf("invalid mode %q for runtime_family %q: must be one of %v", s.Mode, s.RuntimeFamily, supportedModes)
+			return fmt.Errorf("invalid mode %q for runtime_family %q: must be one of %v", s.Mode, s.RuntimeFamily, supportedProxyModes)
 		}
 	case state.RuntimeFamilyNative:
-		return fmt.Errorf("runtime_family %q is reserved but not yet supported by this build", s.RuntimeFamily)
+		if s.Transport != state.TransportMasque {
+			return fmt.Errorf("invalid transport %q for runtime_family %q: must be %q", s.Transport, s.RuntimeFamily, state.TransportMasque)
+		}
+		if s.Mode != state.ModeSocks5 && s.Mode != state.ModeHTTP {
+			return fmt.Errorf("invalid mode %q for runtime_family %q: must be one of %v", s.Mode, s.RuntimeFamily, supportedProxyModes)
+		}
 	}
 
 	return nil

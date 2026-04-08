@@ -56,13 +56,13 @@ func TestValidate_InvalidRuntimeCombination_LegacyMasque(t *testing.T) {
 	}
 }
 
-func TestValidate_RuntimeFamilyNativeReserved(t *testing.T) {
+func TestValidate_RuntimeFamilyNativeMasqueHTTP(t *testing.T) {
 	s := validSettings()
 	s.RuntimeFamily = state.RuntimeFamilyNative
 	s.Transport = state.TransportMasque
-	err := settings.Validate(s)
-	if err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Errorf("expected reserved native runtime error, got: %v", err)
+	s.Mode = state.ModeHTTP
+	if err := settings.Validate(s); err != nil {
+		t.Errorf("expected native MASQUE HTTP settings to be valid, got: %v", err)
 	}
 }
 

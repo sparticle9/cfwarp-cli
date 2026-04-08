@@ -234,3 +234,35 @@ func TestStatus_JSON_NoAccount(t *testing.T) {
 		t.Error("expected backend_running=false")
 	}
 }
+
+func TestStatus_JSON_NativeStaleRuntime(t *testing.T) {
+	d := tempStatusDirs(t)
+	writeAccount(t, d)
+	rt := state.RuntimeState{
+		Backend:           state.BackendNativeMasque,
+		RuntimeFamily:     state.RuntimeFamilyNative,
+		Transport:         state.TransportMasque,
+		Mode:              state.ModeHTTP,
+		Phase:             state.RuntimePhaseConnecting,
+		ServiceSocketPath: filepath.Join(d.Runtime, "missing.sock"),
+		StartedAt:         time.Now().UTC(),
+	}
+	if err := state.SaveRuntime(d, rt); err != nil {
+		t.Fatalf("save runtime: %v", err)
+	}
+
+	out, err := execStatus(t, d, "--json", "--runtime-family", "native", "--transport", "masque", "--mode", "http")
+	if err != nil {
+		t.Fatalf("status --json: %v", err)
+	}
+	var report StatusReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("unmarshal JSON: %v\noutput: %s", err, out)
+	}
+	if report.RuntimeFamily != state.RuntimeFamilyNative || report.Transport != state.TransportMasque || report.Mode != state.ModeHTTP {
+		t.Fatalf("unexpected runtime selection in status report: %+v", report)
+	}
+	if report.Phase != state.RuntimePhaseStopped {
+		t.Fatalf("expected stopped phase for stale native runtime, got %q", report.Phase)
+	}
+}

@@ -10,6 +10,9 @@ import (
 // Cobra populates these; resolveSettings inspects Changed() to build Overrides.
 var settingsFlags struct {
 	backend          string
+	runtimeFamily    string
+	transport        string
+	mode             string
 	listenHost       string
 	listenPort       int
 	proxyMode        string
@@ -22,6 +25,9 @@ var settingsFlags struct {
 func init() {
 	pf := rootCmd.PersistentFlags()
 	pf.StringVar(&settingsFlags.backend, "backend", "", "backend to use (default: singbox-wireguard)")
+	pf.StringVar(&settingsFlags.runtimeFamily, "runtime-family", "", "runtime family to use: legacy or native")
+	pf.StringVar(&settingsFlags.transport, "transport", "", "transport to use: wireguard or masque")
+	pf.StringVar(&settingsFlags.mode, "mode", "", "service mode: socks5, http, or tun")
 	pf.StringVar(&settingsFlags.listenHost, "listen-host", "", "proxy listen address (default: 0.0.0.0)")
 	pf.IntVar(&settingsFlags.listenPort, "listen-port", 0, "proxy listen port (default: 1080)")
 	pf.StringVar(&settingsFlags.proxyMode, "proxy-mode", "", "proxy mode: socks5 or http (default: socks5)")
@@ -40,6 +46,15 @@ func resolveSettings(c *cobra.Command, dirs state.Dirs) (state.Settings, error) 
 	var o settings.Overrides
 	if changed("backend") {
 		o.Backend = &settingsFlags.backend
+	}
+	if changed("runtime-family") {
+		o.RuntimeFamily = &settingsFlags.runtimeFamily
+	}
+	if changed("transport") {
+		o.Transport = &settingsFlags.transport
+	}
+	if changed("mode") {
+		o.Mode = &settingsFlags.mode
 	}
 	if changed("listen-host") {
 		o.ListenHost = &settingsFlags.listenHost
