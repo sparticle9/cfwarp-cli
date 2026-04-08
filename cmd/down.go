@@ -4,15 +4,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
-	"github.com/nexus/cfwarp-cli/internal/supervisor"
 	"github.com/spf13/cobra"
 )
 
 var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop the running WARP proxy backend",
-	Long:  `down stops the managed sing-box process and removes transient runtime files.`,
+	Long:  `down stops the managed backend process and removes transient runtime files.`,
 	RunE: func(c *cobra.Command, args []string) error {
 		if err := platformCheck(); err != nil {
 			return err
@@ -28,13 +28,18 @@ var downCmd = &cobra.Command{
 			return fmt.Errorf("load runtime state: %w", err)
 		}
 
-		if !supervisor.CheckStale(rt) {
+		if !orchestrator.IsRuntimeActive(rt) {
 			fmt.Fprintln(c.OutOrStdout(), "Backend is not running (stale runtime). Cleaning up…")
 			return state.ClearRuntime(dirs)
 		}
 
+		b, err := runtimeBackend(rt)
+		if err != nil {
+			return err
+		}
+
 		fmt.Fprintf(c.OutOrStdout(), "Stopping backend (PID %d)…\n", rt.PID)
-		if err := supervisor.Stop(rt); err != nil {
+		if err := b.Stop(c.Context(), runtimeInfo(rt)); err != nil {
 			return fmt.Errorf("stop backend: %w", err)
 		}
 

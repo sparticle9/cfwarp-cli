@@ -12,6 +12,10 @@ services:
       CFWARP_ENDPOINT_OVERRIDE: ""
       CFWARP_LOG_LEVEL: "info"
       CFWARP_STATE_DIR: "/home/cfwarp/.local/state/cfwarp-cli"
+      # For experimental native MASQUE mode, uncomment the following:
+      # CFWARP_RUNTIME_FAMILY: "native"
+      # CFWARP_TRANSPORT: "masque"
+      # CFWARP_MODE: "http"
     volumes:
       - cfwarp-data:/home/cfwarp/.local/state/cfwarp-cli
 

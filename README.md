@@ -21,13 +21,13 @@ The main motivation is to own the parts that matter for server-side egress:
 
 ## Current implementation direction
 
-The first implementation remains intentionally narrow:
+The current implementation remains intentionally narrow, but is no longer WireGuard-only:
 
 - **Docker-first**
 - **Linux-first**
 - **explicit proxy mode first**
-- **minimal WireGuard-based backend first**
-- **future MASQUE path reserved, not yet implemented**
+- **stable `singbox-wireguard` backend**
+- **experimental native MASQUE backend**
 
 ## Deployment / usage scenarios
 
@@ -84,6 +84,8 @@ This matters because the fastest raw tunnel is not always the best fit for real 
 Implemented today:
 
 - `cfwarp-cli` Docker-oriented WireGuard backend flow
+- experimental native MASQUE HTTP/SOCKS runtime path
+- manual Alpine package workflow for branch builds
 - published-image benchmark harness
 - comparison against original `MicroWARP`
 - raw tunnel + API-like workload benchmarking
@@ -91,6 +93,7 @@ Implemented today:
 
 Not implemented yet:
 
-- MASQUE backend
+- full CLI/control-plane polish for the new transport-oriented UX
+- broader native runtime packaging and docs beyond the current Alpine-first path
 - chart generation in the reporting pipeline
 - broader provider/backend families beyond the current WARP-focused scope

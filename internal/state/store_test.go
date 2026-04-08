@@ -50,6 +50,52 @@ func TestSaveLoadAccount(t *testing.T) {
 	if got.AccountID != acc.AccountID || got.Token != acc.Token {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", got, acc)
 	}
+	if got.SchemaVersion != state.CurrentAccountSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", state.CurrentAccountSchemaVersion, got.SchemaVersion)
+	}
+	if got.WireGuard == nil {
+		t.Fatal("expected WireGuard transport data to be populated")
+	}
+	if got.WireGuard.PrivateKey != acc.WARPPrivateKey || got.WireGuard.PeerPubKey != acc.WARPPeerPubKey {
+		t.Errorf("unexpected nested wireguard data: %+v", got.WireGuard)
+	}
+}
+
+func TestLoadAccount_LegacyJSONMigratesToWireGuardState(t *testing.T) {
+	d := tempDirs(t)
+	if err := os.MkdirAll(d.Config, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `{
+  "account_id": "acct-123",
+  "token": "tok-abc",
+  "client_id": "cid-xyz",
+  "warp_private_key": "priv",
+  "warp_peer_public_key": "pub",
+  "warp_ipv4": "172.16.0.2/32",
+  "warp_ipv6": "fd01::2/128",
+  "warp_reserved": [1,2,3],
+  "warp_peer_endpoint": "162.159.192.1:2408",
+  "created_at": "2026-04-07T00:00:00Z",
+  "source": "import"
+}`
+	if err := os.WriteFile(d.AccountFile(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy account: %v", err)
+	}
+
+	got, err := state.LoadAccount(d)
+	if err != nil {
+		t.Fatalf("LoadAccount: %v", err)
+	}
+	if got.WireGuard == nil {
+		t.Fatal("expected migrated wireguard state")
+	}
+	if got.WireGuard.PrivateKey != "priv" || got.WireGuard.PeerEndpoint != "162.159.192.1:2408" {
+		t.Errorf("unexpected migrated wireguard state: %+v", got.WireGuard)
+	}
+	if got.WARPPrivateKey != "priv" || got.WARPPeerEndpoint != "162.159.192.1:2408" {
+		t.Errorf("expected legacy aliases to remain populated, got %+v", got)
+	}
 }
 
 func TestSaveAccount_NoOverwrite(t *testing.T) {
@@ -95,8 +141,12 @@ func TestLoadAccount_NotFound(t *testing.T) {
 func TestSaveLoadSettings(t *testing.T) {
 	d := tempDirs(t)
 	s := state.DefaultSettings()
+	s.RuntimeFamily = state.RuntimeFamilyLegacy
+	s.Transport = state.TransportWireGuard
+	s.Mode = state.ModeHTTP
 	s.ListenPort = 9090
 	s.EndpointOverride = "162.159.192.1:4500"
+	s.MasqueOptions = &state.MasqueOptions{SNI: "consumer-masque.cloudflareclient.com", ConnectPort: 443}
 
 	if err := state.SaveSettings(d, s); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
@@ -108,6 +158,43 @@ func TestSaveLoadSettings(t *testing.T) {
 	if got.ListenPort != 9090 || got.EndpointOverride != s.EndpointOverride {
 		t.Errorf("round-trip mismatch: got %+v", got)
 	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard || got.Mode != state.ModeHTTP {
+		t.Errorf("unexpected runtime selection after round-trip: %+v", got)
+	}
+	if got.MasqueOptions == nil || got.MasqueOptions.SNI != "consumer-masque.cloudflareclient.com" {
+		t.Errorf("expected nested masque options to round-trip, got %+v", got.MasqueOptions)
+	}
+}
+
+func TestLoadSettings_LegacyJSONMigratesRuntimeSelection(t *testing.T) {
+	d := tempDirs(t)
+	if err := os.MkdirAll(d.Config, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `{
+  "backend": "singbox-wireguard",
+  "listen_host": "127.0.0.1",
+  "listen_port": 8080,
+  "proxy_mode": "http",
+  "log_level": "debug"
+}`
+	if err := os.WriteFile(d.SettingsFile(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy settings: %v", err)
+	}
+
+	got, err := state.LoadSettings(d)
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard {
+		t.Errorf("expected migrated runtime selection, got %+v", got)
+	}
+	if got.Mode != state.ModeHTTP || got.ProxyMode != state.ModeHTTP {
+		t.Errorf("expected migrated mode http, got %+v", got)
+	}
+	if got.Backend != state.BackendSingboxWireGuard {
+		t.Errorf("expected backend alias %q, got %q", state.BackendSingboxWireGuard, got.Backend)
+	}
 }
 
 func TestLoadSettings_DefaultsOnNotFound(t *testing.T) {
@@ -116,8 +203,11 @@ func TestLoadSettings_DefaultsOnNotFound(t *testing.T) {
 	if !errors.Is(err, state.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
-	if got.Backend != "singbox-wireguard" || got.ListenPort != 1080 {
+	if got.Backend != state.BackendSingboxWireGuard || got.ListenPort != 1080 {
 		t.Errorf("expected defaults, got %+v", got)
+	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard || got.Mode != state.ModeSocks5 {
+		t.Errorf("expected default runtime selection, got %+v", got)
 	}
 }
 
@@ -126,9 +216,17 @@ func TestLoadSettings_DefaultsOnNotFound(t *testing.T) {
 func TestSaveLoadRuntime(t *testing.T) {
 	d := tempDirs(t)
 	rt := state.RuntimeState{
-		PID:       42,
-		Backend:   "singbox-wireguard",
-		StartedAt: time.Now().UTC().Truncate(time.Second),
+		PID:                42,
+		Backend:            state.BackendSingboxWireGuard,
+		RuntimeFamily:      state.RuntimeFamilyLegacy,
+		Transport:          state.TransportWireGuard,
+		Mode:               state.ModeHTTP,
+		Phase:              state.RuntimePhaseConnected,
+		ListenHost:         "127.0.0.1",
+		ListenPort:         8080,
+		SelectedEndpoint:   "162.159.192.1:2408",
+		LastTransportError: "",
+		StartedAt:          time.Now().UTC().Truncate(time.Second),
 	}
 
 	if err := state.SaveRuntime(d, rt); err != nil {
@@ -140,6 +238,45 @@ func TestSaveLoadRuntime(t *testing.T) {
 	}
 	if got.PID != 42 {
 		t.Errorf("expected PID 42, got %d", got.PID)
+	}
+	if got.SchemaVersion != state.CurrentRuntimeSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", state.CurrentRuntimeSchemaVersion, got.SchemaVersion)
+	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard || got.Mode != state.ModeHTTP {
+		t.Errorf("unexpected runtime selection after round-trip: %+v", got)
+	}
+	if got.Phase != state.RuntimePhaseConnected {
+		t.Errorf("expected connected phase, got %q", got.Phase)
+	}
+}
+
+func TestLoadRuntime_LegacyJSONMigratesRuntimeMetadata(t *testing.T) {
+	d := tempDirs(t)
+	if err := os.MkdirAll(d.Runtime, 0o700); err != nil {
+		t.Fatalf("mkdir runtime: %v", err)
+	}
+	legacy := `{
+  "pid": 42,
+  "backend": "singbox-wireguard",
+  "config_path": "/run/cfwarp-cli/backend.json",
+  "stdout_log_path": "/tmp/stdout.log",
+  "stderr_log_path": "/tmp/stderr.log",
+  "started_at": "2026-04-07T00:00:00Z",
+  "last_error": "",
+  "local_reachable": true
+}`
+	if err := os.WriteFile(d.RuntimeFile(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy runtime: %v", err)
+	}
+	got, err := state.LoadRuntime(d)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard {
+		t.Errorf("expected migrated runtime selection, got %+v", got)
+	}
+	if got.Phase != state.RuntimePhaseConnected {
+		t.Errorf("expected connected phase for legacy runtime, got %q", got.Phase)
 	}
 }
 

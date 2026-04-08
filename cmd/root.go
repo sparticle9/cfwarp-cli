@@ -5,6 +5,8 @@ import (
 	"os"
 	"runtime"
 
+	_ "github.com/nexus/cfwarp-cli/internal/backend/native"
+	_ "github.com/nexus/cfwarp-cli/internal/backend/singbox"
 	"github.com/spf13/cobra"
 )
 
@@ -13,8 +15,8 @@ var globalStateDir string
 var rootCmd = &cobra.Command{
 	Use:   "cfwarp-cli",
 	Short: "CLI toolkit for Cloudflare WARP-backed proxy",
-	Long: `cfwarp-cli manages Cloudflare WARP connectivity via a userspace
-WireGuard backend, exposing an explicit proxy (SOCKS5/HTTP) on Linux/Docker.`,
+	Long: `cfwarp-cli manages Cloudflare WARP connectivity via selectable proxy
+backends, exposing an explicit proxy (SOCKS5/HTTP) on Linux/Docker.`,
 	SilenceUsage: true,
 }
 
@@ -23,12 +25,19 @@ func init() {
 	rootCmd.AddCommand(
 		registerCmd,
 		importCmd,
+		registrationCmd,
+		transportCmd,
+		modeCmd,
+		statsCmd,
 		renderCmd,
 		upCmd,
 		downCmd,
+		connectCmd,
+		disconnectCmd,
 		statusCmd,
 		endpointCmd,
 		versionCmd,
+		serviceCmd,
 	)
 }
 

@@ -1,0 +1,213 @@
+---
+# package-runtime-smoke.yml — packaged-image runtime smoke validation on remote hosts.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini ansible/package-runtime-smoke.yml
+#   ansible-playbook -i inventory.ini ansible/package-runtime-smoke.yml --limit warp \
+#     -e cfwarp_image=ghcr.io/sparticle9/cfwarp-cli:feat-masque \
+#     -e image_revision_expected=ebf8e8e7f200b5900571b8fb3368816ac0b29a82
+#
+# Validates three packaged-image paths on the target host:
+#   1. legacy singbox-wireguard SOCKS5
+#   2. native MASQUE HTTP
+#   3. native MASQUE SOCKS5
+#
+# The native SOCKS case allows multiple cold-start attempts because live testing
+# has shown occasional transient startup failures during MASQUE tunnel bring-up.
+
+- name: Packaged runtime smoke validation
+  hosts: warp
+  gather_facts: false
+
+  vars:
+    cfwarp_image: "ghcr.io/sparticle9/cfwarp-cli:feat-masque"
+    image_revision_expected: ""
+    test_root: "/tmp/cfwarp-fulltest"
+    cases:
+      - name: legacy
+        container_name: cfwarp-legacy-fulltest
+        host_port: 28082
+        container_port: 1080
+        proxy_kind: socks5
+        startup_attempts: 1
+        initial_wait_seconds: 15
+        probe_attempts: 3
+        probe_delay_seconds: 5
+        env:
+          CFWARP_LISTEN_HOST: "0.0.0.0"
+          CFWARP_LISTEN_PORT: "1080"
+          CFWARP_PROXY_MODE: "socks5"
+          CFWARP_LOG_LEVEL: "info"
+
+      - name: native-http
+        container_name: cfwarp-native-http-fulltest
+        host_port: 28083
+        container_port: 28080
+        proxy_kind: http
+        startup_attempts: 3
+        initial_wait_seconds: 15
+        probe_attempts: 3
+        probe_delay_seconds: 5
+        env:
+          CFWARP_RUNTIME_FAMILY: "native"
+          CFWARP_TRANSPORT: "masque"
+          CFWARP_MODE: "http"
+          CFWARP_LISTEN_HOST: "0.0.0.0"
+          CFWARP_LISTEN_PORT: "28080"
+          CFWARP_LOG_LEVEL: "info"
+
+      - name: native-socks
+        container_name: cfwarp-native-socks-fulltest
+        host_port: 28084
+        container_port: 28081
+        proxy_kind: socks5
+        startup_attempts: 8
+        initial_wait_seconds: 15
+        probe_attempts: 3
+        probe_delay_seconds: 5
+        env:
+          CFWARP_RUNTIME_FAMILY: "native"
+          CFWARP_TRANSPORT: "masque"
+          CFWARP_MODE: "socks5"
+          CFWARP_LISTEN_HOST: "0.0.0.0"
+          CFWARP_LISTEN_PORT: "28081"
+          CFWARP_LOG_LEVEL: "info"
+
+  tasks:
+    - name: Ensure test root exists
+      ansible.builtin.file:
+        path: "{{ test_root }}"
+        state: directory
+        mode: "0755"
+
+    - name: Pull packaged image under test
+      ansible.builtin.command:
+        cmd: docker pull {{ cfwarp_image }}
+      register: docker_pull
+      changed_when: "'Image is up to date' not in docker_pull.stdout"
+
+    - name: Inspect packaged image labels
+      ansible.builtin.command:
+        cmd: docker image inspect {{ cfwarp_image }} --format {{ '"{{json .Config.Labels}}"' }}
+      register: image_labels_raw
+      changed_when: false
+
+    - name: Parse packaged image labels
+      ansible.builtin.set_fact:
+        image_labels: "{{ image_labels_raw.stdout | from_json }}"
+
+    - name: Show packaged image revision
+      ansible.builtin.debug:
+        msg:
+          image: "{{ cfwarp_image }}"
+          revision: "{{ image_labels['org.opencontainers.image.revision'] | default('unknown') }}"
+          version: "{{ image_labels['org.opencontainers.image.version'] | default('unknown') }}"
+
+    - name: Assert packaged image revision when expected
+      ansible.builtin.assert:
+        that:
+          - image_labels['org.opencontainers.image.revision'] | default('') == image_revision_expected
+        fail_msg: >-
+          expected image revision {{ image_revision_expected }}, got
+          {{ image_labels['org.opencontainers.image.revision'] | default('unknown') }}
+        success_msg: packaged image revision matches expected commit
+      when: image_revision_expected | length > 0
+
+    - name: Run packaged-image functionality case
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        name={{ item.container_name | quote }}
+        state_dir={{ (test_root ~ '/' ~ item.name ~ '-state') | quote }}
+        host_port={{ item.host_port | quote }}
+        container_port={{ item.container_port | quote }}
+        startup_attempts={{ item.startup_attempts | int }}
+        initial_wait={{ item.initial_wait_seconds | int }}
+        probe_attempts={{ item.probe_attempts | int }}
+        probe_delay={{ item.probe_delay_seconds | int }}
+
+        cleanup() {
+          docker rm -f "$name" >/dev/null 2>&1 || true
+        }
+
+        trap cleanup EXIT
+
+        rm -rf "$state_dir"
+        mkdir -p "$state_dir"
+
+        attempt=1
+        while [ "$attempt" -le "$startup_attempts" ]; do
+          echo "== CASE {{ item.name }} / attempt ${attempt} =="
+          cleanup
+          rm -rf "$state_dir/run" "$state_dir/logs"
+          mkdir -p "$state_dir"
+
+          cid=$(docker run -d \
+            --name "$name" \
+            -p "127.0.0.1:${host_port}:${container_port}" \
+            -v "$state_dir:/home/cfwarp/.local/state/cfwarp-cli" \
+            {% for key, value in item.env.items() %}-e {{ key }}={{ value | quote }} \
+            {% endfor %}
+            {{ cfwarp_image | quote }})
+          echo "container=${cid}"
+          sleep "$initial_wait"
+
+          if docker ps --format '{{ '{{.Names}}' }}' | grep -qx "$name"; then
+            echo "-- status --"
+            docker exec "$name" cfwarp-cli status --json --state-dir /home/cfwarp/.local/state/cfwarp-cli || true
+
+            probe=1
+            while [ "$probe" -le "$probe_attempts" ]; do
+              echo "-- trace probe ${probe} --"
+              if [ {{ item.proxy_kind | quote }} = "http" ]; then
+                if out=$(curl -fsSL -x "http://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace); then
+                  printf '%s\n' "$out"
+                  if printf '%s\n' "$out" | grep -q '^warp=on$'; then
+                    echo "PASS {{ item.name }}"
+                    exit 0
+                  fi
+                fi
+              else
+                if out=$(curl -fsSL --proxy "socks5h://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace); then
+                  printf '%s\n' "$out"
+                  if printf '%s\n' "$out" | grep -q '^warp=on$'; then
+                    echo "PASS {{ item.name }}"
+                    exit 0
+                  fi
+                fi
+              fi
+              probe=$((probe + 1))
+              sleep "$probe_delay"
+            done
+          fi
+
+          echo "-- logs --"
+          docker logs "$name" || true
+          if [ -f "$state_dir/logs/backend.stderr.log" ]; then
+            echo "-- backend stderr --"
+            cat "$state_dir/logs/backend.stderr.log"
+          fi
+          attempt=$((attempt + 1))
+          if [ "$attempt" -le "$startup_attempts" ]; then
+            sleep 3
+          fi
+        done
+
+        echo "FAIL {{ item.name }}"
+        exit 1
+      args:
+        executable: /bin/bash
+      loop: "{{ cases }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: fulltest_cases
+      changed_when: false
+
+    - name: Summarize case results
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} => rc={{ item.rc }}
+          {{ item.stdout | default('') }}
+      loop: "{{ fulltest_cases.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
