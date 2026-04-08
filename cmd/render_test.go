@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,6 +57,14 @@ func TestRender_UsesRegisteredBackend(t *testing.T) {
 	}
 	d := renderStateDirs(t)
 	writeRenderAccount(t, d)
+
+	fakeBinDir := t.TempDir()
+	fakeSingbox := filepath.Join(fakeBinDir, "sing-box")
+	if err := os.WriteFile(fakeSingbox, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake sing-box: %v", err)
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", fakeBinDir+string(os.PathListSeparator)+origPath)
 
 	out, err := executeRender(t, "render", "--state-dir", d.Config)
 	if err != nil {
