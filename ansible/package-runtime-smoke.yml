@@ -1,9 +1,9 @@
 ---
-# full-test.yml — packaged-image functionality validation on remote hosts.
+# package-runtime-smoke.yml — packaged-image runtime smoke validation on remote hosts.
 #
 # Usage:
-#   ansible-playbook -i inventory.ini ansible/full-test.yml
-#   ansible-playbook -i inventory.ini ansible/full-test.yml --limit warp \
+#   ansible-playbook -i inventory.ini ansible/package-runtime-smoke.yml
+#   ansible-playbook -i inventory.ini ansible/package-runtime-smoke.yml --limit warp \
 #     -e cfwarp_image=ghcr.io/sparticle9/cfwarp-cli:feat-masque \
 #     -e image_revision_expected=ebf8e8e7f200b5900571b8fb3368816ac0b29a82
 #
@@ -15,7 +15,7 @@
 # The native SOCKS case allows multiple cold-start attempts because live testing
 # has shown occasional transient startup failures during MASQUE tunnel bring-up.
 
-- name: Full packaged-image functionality validation
+- name: Packaged runtime smoke validation
   hosts: warp
   gather_facts: false
 
@@ -44,7 +44,7 @@
         host_port: 28083
         container_port: 28080
         proxy_kind: http
-        startup_attempts: 1
+        startup_attempts: 3
         initial_wait_seconds: 15
         probe_attempts: 3
         probe_delay_seconds: 5
@@ -61,7 +61,7 @@
         host_port: 28084
         container_port: 28081
         proxy_kind: socks5
-        startup_attempts: 3
+        startup_attempts: 8
         initial_wait_seconds: 15
         probe_attempts: 3
         probe_delay_seconds: 5
@@ -132,11 +132,14 @@
 
         trap cleanup EXIT
 
+        rm -rf "$state_dir"
+        mkdir -p "$state_dir"
+
         attempt=1
         while [ "$attempt" -le "$startup_attempts" ]; do
           echo "== CASE {{ item.name }} / attempt ${attempt} =="
           cleanup
-          rm -rf "$state_dir"
+          rm -rf "$state_dir/run" "$state_dir/logs"
           mkdir -p "$state_dir"
 
           cid=$(docker run -d \
@@ -180,7 +183,14 @@
 
           echo "-- logs --"
           docker logs "$name" || true
+          if [ -f "$state_dir/logs/backend.stderr.log" ]; then
+            echo "-- backend stderr --"
+            cat "$state_dir/logs/backend.stderr.log"
+          fi
           attempt=$((attempt + 1))
+          if [ "$attempt" -le "$startup_attempts" ]; then
+            sleep 3
+          fi
         done
 
         echo "FAIL {{ item.name }}"
