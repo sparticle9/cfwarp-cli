@@ -25,6 +25,10 @@ func init() {
 	rootCmd.AddCommand(
 		registerCmd,
 		importCmd,
+		registrationCmd,
+		transportCmd,
+		modeCmd,
+		statsCmd,
 		renderCmd,
 		upCmd,
 		downCmd,

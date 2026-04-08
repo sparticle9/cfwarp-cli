@@ -1,11 +1,7 @@
 package cmd
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"time"
 
 	"github.com/nexus/cfwarp-cli/internal/state"
 	"github.com/spf13/cobra"
@@ -26,44 +22,7 @@ warp_peer_public_key, warp_ipv4, warp_ipv6, account_id, and token.`,
 		if err := platformCheck(); err != nil {
 			return err
 		}
-
-		dirs := state.Resolve(globalStateDir, "")
-		if err := dirs.MkdirAll(); err != nil {
-			return fmt.Errorf("prepare state directories: %w", err)
-		}
-
-		// Guard against accidental overwrite without --force.
-		if _, err := state.LoadAccount(dirs); err == nil && !importForce {
-			return fmt.Errorf("account already exists at %s; use --force to overwrite", dirs.AccountFile())
-		} else if err != nil && !errors.Is(err, state.ErrNotFound) {
-			return fmt.Errorf("read existing account: %w", err)
-		}
-
-		raw, err := os.ReadFile(importFile)
-		if err != nil {
-			return fmt.Errorf("read import file: %w", err)
-		}
-
-		var acc state.AccountState
-		if err := json.Unmarshal(raw, &acc); err != nil {
-			return fmt.Errorf("parse import file: %w", err)
-		}
-		if err := validateAccount(acc); err != nil {
-			return fmt.Errorf("invalid import file: %w", err)
-		}
-
-		acc.Source = "import"
-		if acc.CreatedAt.IsZero() {
-			acc.CreatedAt = time.Now().UTC()
-		}
-
-		if err := state.SaveAccount(dirs, acc, importForce); err != nil {
-			return fmt.Errorf("save account: %w", err)
-		}
-
-		fmt.Fprintf(c.OutOrStdout(), "Imported successfully (account: %s)\n", acc.AccountID)
-		fmt.Fprintf(c.OutOrStdout(), "State saved to: %s\n", dirs.AccountFile())
-		return nil
+		return runImport(c)
 	},
 }
 

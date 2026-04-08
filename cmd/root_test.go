@@ -40,7 +40,7 @@ func TestHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--help failed: %v", err)
 	}
-	for _, cmd := range []string{"register", "import", "render", "up", "down", "connect", "disconnect", "status", "endpoint", "version"} {
+	for _, cmd := range []string{"register", "import", "registration", "transport", "mode", "stats", "render", "up", "down", "connect", "disconnect", "status", "endpoint", "version"} {
 		if !strings.Contains(out, cmd) {
 			t.Errorf("expected help to list command %q", cmd)
 		}

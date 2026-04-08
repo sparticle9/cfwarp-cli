@@ -54,7 +54,7 @@
   - Add command and integration tests for `connect`, `disconnect`, `status --json`, and compatibility wrappers from `up/down` when native MASQUE is selected.
   - Requirements/design refs: control-plane runtime model, error handling, migration summary steps 4–5.
 
-- [ ] 10. Redesign the CLI surface toward transport/mode-oriented control while preserving compatibility.
+- [x] 10. Redesign the CLI surface toward transport/mode-oriented control while preserving compatibility.
   - Add new command groups for `registration`, `transport`, and `mode`, plus JSON-friendly `status`/`stats` paths aligned with agent usage.
   - Keep the current command set working during transition, but route shared logic through the new control-plane services and state model.
   - Add command tests covering help text, JSON output, idempotent updates, and backwards-compatible aliases or wrappers.
