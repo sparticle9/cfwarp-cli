@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/nexus/cfwarp-cli/internal/health"
+	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
-	"github.com/nexus/cfwarp-cli/internal/supervisor"
 	"github.com/spf13/cobra"
 )
 
@@ -17,15 +17,20 @@ var statusTrace bool
 
 // StatusReport is the machine-readable status output.
 type StatusReport struct {
-	AccountConfigured bool   `json:"account_configured"`
-	BackendRunning    bool   `json:"backend_running"`
-	LocalReachable    bool   `json:"local_reachable"`
-	PID               int    `json:"pid,omitempty"`
-	Backend           string `json:"backend,omitempty"`
-	ListenAddr        string `json:"listen_addr,omitempty"`
-	StartedAt         string `json:"started_at,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
-	WARPVerified      *bool  `json:"warp_verified,omitempty"`
+	AccountConfigured  bool   `json:"account_configured"`
+	BackendRunning     bool   `json:"backend_running"`
+	LocalReachable     bool   `json:"local_reachable"`
+	PID                int    `json:"pid,omitempty"`
+	Backend            string `json:"backend,omitempty"`
+	RuntimeFamily      string `json:"runtime_family,omitempty"`
+	Transport          string `json:"transport,omitempty"`
+	Mode               string `json:"mode,omitempty"`
+	Phase              string `json:"phase,omitempty"`
+	ListenAddr         string `json:"listen_addr,omitempty"`
+	StartedAt          string `json:"started_at,omitempty"`
+	LastError          string `json:"last_error,omitempty"`
+	LastTransportError string `json:"last_transport_error,omitempty"`
+	WARPVerified       *bool  `json:"warp_verified,omitempty"`
 }
 
 var statusCmd = &cobra.Command{
@@ -51,7 +56,12 @@ Use --trace to also probe cdn-cgi/trace through the proxy (requires live network
 		if rtErr == nil {
 			report.PID = rt.PID
 			report.Backend = rt.Backend
+			report.RuntimeFamily = rt.RuntimeFamily
+			report.Transport = rt.Transport
+			report.Mode = rt.Mode
+			report.Phase = rt.Phase
 			report.LastError = rt.LastError
+			report.LastTransportError = rt.LastTransportError
 			if !rt.StartedAt.IsZero() {
 				report.StartedAt = rt.StartedAt.Format(time.RFC3339)
 			}
@@ -81,13 +91,15 @@ Use --trace to also probe cdn-cgi/trace through the proxy (requires live network
 				} else {
 					report.BackendRunning = st.Running
 					report.LocalReachable = st.LocalReachable
+					report.Phase = orchestrator.DerivePhase(rt, st.Running, st.LocalReachable)
 					if report.LastError == "" {
 						report.LastError = st.LastError
 					}
 				}
 			}
 		} else if rtErr == nil {
-			report.BackendRunning = supervisor.IsRunning(rt.PID)
+			report.BackendRunning = orchestrator.IsRuntimeActive(rt)
+			report.Phase = orchestrator.DerivePhase(rt, report.BackendRunning, report.LocalReachable)
 		}
 
 		// 5. Optional cdn-cgi/trace probe.
@@ -145,12 +157,15 @@ func printHuman(c *cobra.Command, r StatusReport, accErr, rtErr error) {
 	if errors.Is(rtErr, state.ErrNotFound) {
 		fmt.Fprintf(c.OutOrStdout(), "Backend:  not started %s\n", tick(false))
 	} else if r.BackendRunning {
-		fmt.Fprintf(c.OutOrStdout(), "Backend:  %s running %s (PID %d, started %s)\n",
-			r.Backend, tick(true), r.PID, r.StartedAt)
+		fmt.Fprintf(c.OutOrStdout(), "Backend:  %s running %s (PID %d, started %s, phase %s)\n",
+			r.Backend, tick(true), r.PID, r.StartedAt, r.Phase)
 	} else {
 		fmt.Fprintf(c.OutOrStdout(), "Backend:  not running %s", tick(false))
 		if r.LastError != "" {
 			fmt.Fprintf(c.OutOrStdout(), " — last error: %s", r.LastError)
+		}
+		if r.Phase != "" {
+			fmt.Fprintf(c.OutOrStdout(), " — phase: %s", r.Phase)
 		}
 		fmt.Fprintln(c.OutOrStdout())
 	}
@@ -162,6 +177,10 @@ func printHuman(c *cobra.Command, r StatusReport, accErr, rtErr error) {
 		} else {
 			fmt.Fprintf(c.OutOrStdout(), "Proxy:    not reachable at %s %s\n", r.ListenAddr, tick(false))
 		}
+	}
+
+	if r.LastTransportError != "" {
+		fmt.Fprintf(c.OutOrStdout(), "Transport: last error: %s\n", r.LastTransportError)
 	}
 
 	// WARP trace (optional)

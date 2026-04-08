@@ -216,9 +216,17 @@ func TestLoadSettings_DefaultsOnNotFound(t *testing.T) {
 func TestSaveLoadRuntime(t *testing.T) {
 	d := tempDirs(t)
 	rt := state.RuntimeState{
-		PID:       42,
-		Backend:   "singbox-wireguard",
-		StartedAt: time.Now().UTC().Truncate(time.Second),
+		PID:                42,
+		Backend:            state.BackendSingboxWireGuard,
+		RuntimeFamily:      state.RuntimeFamilyLegacy,
+		Transport:          state.TransportWireGuard,
+		Mode:               state.ModeHTTP,
+		Phase:              state.RuntimePhaseConnected,
+		ListenHost:         "127.0.0.1",
+		ListenPort:         8080,
+		SelectedEndpoint:   "162.159.192.1:2408",
+		LastTransportError: "",
+		StartedAt:          time.Now().UTC().Truncate(time.Second),
 	}
 
 	if err := state.SaveRuntime(d, rt); err != nil {
@@ -230,6 +238,45 @@ func TestSaveLoadRuntime(t *testing.T) {
 	}
 	if got.PID != 42 {
 		t.Errorf("expected PID 42, got %d", got.PID)
+	}
+	if got.SchemaVersion != state.CurrentRuntimeSchemaVersion {
+		t.Fatalf("expected schema version %d, got %d", state.CurrentRuntimeSchemaVersion, got.SchemaVersion)
+	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard || got.Mode != state.ModeHTTP {
+		t.Errorf("unexpected runtime selection after round-trip: %+v", got)
+	}
+	if got.Phase != state.RuntimePhaseConnected {
+		t.Errorf("expected connected phase, got %q", got.Phase)
+	}
+}
+
+func TestLoadRuntime_LegacyJSONMigratesRuntimeMetadata(t *testing.T) {
+	d := tempDirs(t)
+	if err := os.MkdirAll(d.Runtime, 0o700); err != nil {
+		t.Fatalf("mkdir runtime: %v", err)
+	}
+	legacy := `{
+  "pid": 42,
+  "backend": "singbox-wireguard",
+  "config_path": "/run/cfwarp-cli/backend.json",
+  "stdout_log_path": "/tmp/stdout.log",
+  "stderr_log_path": "/tmp/stderr.log",
+  "started_at": "2026-04-07T00:00:00Z",
+  "last_error": "",
+  "local_reachable": true
+}`
+	if err := os.WriteFile(d.RuntimeFile(), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy runtime: %v", err)
+	}
+	got, err := state.LoadRuntime(d)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if got.RuntimeFamily != state.RuntimeFamilyLegacy || got.Transport != state.TransportWireGuard {
+		t.Errorf("expected migrated runtime selection, got %+v", got)
+	}
+	if got.Phase != state.RuntimePhaseConnected {
+		t.Errorf("expected connected phase for legacy runtime, got %q", got.Phase)
 	}
 }
 

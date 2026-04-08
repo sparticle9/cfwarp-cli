@@ -9,6 +9,7 @@ import (
 const (
 	CurrentAccountSchemaVersion  = 2
 	CurrentSettingsSchemaVersion = 2
+	CurrentRuntimeSchemaVersion  = 2
 
 	RuntimeFamilyLegacy = "legacy"
 	RuntimeFamilyNative = "native"
@@ -359,17 +360,159 @@ func InferRuntimeSelection(backend string) (runtimeFamily, transport string) {
 	}
 }
 
+const (
+	RuntimePhaseIdle       = "idle"
+	RuntimePhaseConnecting = "connecting"
+	RuntimePhaseConnected  = "connected"
+	RuntimePhaseDegraded   = "degraded"
+	RuntimePhaseStopped    = "stopped"
+)
+
 // RuntimeState holds ephemeral process metadata persisted to runtime.json.
 type RuntimeState struct {
-	PID              int       `json:"pid"`
-	Backend          string    `json:"backend"`
-	ConfigPath       string    `json:"config_path"`
-	StdoutLogPath    string    `json:"stdout_log_path"`
-	StderrLogPath    string    `json:"stderr_log_path"`
-	StartedAt        time.Time `json:"started_at"`
-	LastError        string    `json:"last_error,omitempty"`
-	LocalReachable   bool      `json:"local_reachable"`
-	LastTraceSummary string    `json:"last_trace_summary,omitempty"`
+	SchemaVersion       int       `json:"-"`
+	PID                 int       `json:"-"`
+	Backend             string    `json:"-"`
+	RuntimeFamily       string    `json:"-"`
+	Transport           string    `json:"-"`
+	Mode                string    `json:"-"`
+	Phase               string    `json:"-"`
+	ListenHost          string    `json:"-"`
+	ListenPort          int       `json:"-"`
+	SelectedEndpoint    string    `json:"-"`
+	SelectedAddressFam  string    `json:"-"`
+	ServiceSocketPath   string    `json:"-"`
+	ConfigPath          string    `json:"-"`
+	StdoutLogPath       string    `json:"-"`
+	StderrLogPath       string    `json:"-"`
+	StartedAt           time.Time `json:"-"`
+	LastReconnectAt     time.Time `json:"-"`
+	LastReconnectReason string    `json:"-"`
+	LastTransportError  string    `json:"-"`
+	LastError           string    `json:"-"`
+	LocalReachable      bool      `json:"-"`
+	LastTraceSummary    string    `json:"-"`
+}
+
+type runtimeStateJSON struct {
+	SchemaVersion       int       `json:"schema_version,omitempty"`
+	PID                 int       `json:"pid,omitempty"`
+	Backend             string    `json:"backend,omitempty"`
+	RuntimeFamily       string    `json:"runtime_family,omitempty"`
+	Transport           string    `json:"transport,omitempty"`
+	Mode                string    `json:"mode,omitempty"`
+	Phase               string    `json:"phase,omitempty"`
+	ListenHost          string    `json:"listen_host,omitempty"`
+	ListenPort          int       `json:"listen_port,omitempty"`
+	SelectedEndpoint    string    `json:"selected_endpoint,omitempty"`
+	SelectedAddressFam  string    `json:"selected_address_family,omitempty"`
+	ServiceSocketPath   string    `json:"service_socket_path,omitempty"`
+	ConfigPath          string    `json:"config_path,omitempty"`
+	StdoutLogPath       string    `json:"stdout_log_path,omitempty"`
+	StderrLogPath       string    `json:"stderr_log_path,omitempty"`
+	StartedAt           time.Time `json:"started_at,omitempty"`
+	LastReconnectAt     time.Time `json:"last_reconnect_at,omitempty"`
+	LastReconnectReason string    `json:"last_reconnect_reason,omitempty"`
+	LastTransportError  string    `json:"last_transport_error,omitempty"`
+	LastError           string    `json:"last_error,omitempty"`
+	LocalReachable      bool      `json:"local_reachable,omitempty"`
+	LastTraceSummary    string    `json:"last_trace_summary,omitempty"`
+}
+
+// Normalize upgrades older runtime state into the richer runtime model.
+func (r *RuntimeState) Normalize() {
+	if r.SchemaVersion == 0 {
+		r.SchemaVersion = CurrentRuntimeSchemaVersion
+	}
+	r.Backend = strings.ToLower(r.Backend)
+	r.RuntimeFamily = strings.ToLower(r.RuntimeFamily)
+	r.Transport = strings.ToLower(r.Transport)
+	r.Mode = strings.ToLower(r.Mode)
+	r.Phase = strings.ToLower(r.Phase)
+	if r.RuntimeFamily == "" || r.Transport == "" {
+		rf, transport := InferRuntimeSelection(r.Backend)
+		if r.RuntimeFamily == "" {
+			r.RuntimeFamily = rf
+		}
+		if r.Transport == "" {
+			r.Transport = transport
+		}
+	}
+	if r.Mode == "" {
+		r.Mode = ModeSocks5
+	}
+	if r.Phase == "" {
+		switch {
+		case r.PID > 0:
+			r.Phase = RuntimePhaseConnected
+		case r.LastError != "" || r.LastTransportError != "":
+			r.Phase = RuntimePhaseStopped
+		default:
+			r.Phase = RuntimePhaseIdle
+		}
+	}
+}
+
+func (r RuntimeState) MarshalJSON() ([]byte, error) {
+	rr := r
+	rr.Normalize()
+	return json.Marshal(runtimeStateJSON{
+		SchemaVersion:       rr.SchemaVersion,
+		PID:                 rr.PID,
+		Backend:             rr.Backend,
+		RuntimeFamily:       rr.RuntimeFamily,
+		Transport:           rr.Transport,
+		Mode:                rr.Mode,
+		Phase:               rr.Phase,
+		ListenHost:          rr.ListenHost,
+		ListenPort:          rr.ListenPort,
+		SelectedEndpoint:    rr.SelectedEndpoint,
+		SelectedAddressFam:  rr.SelectedAddressFam,
+		ServiceSocketPath:   rr.ServiceSocketPath,
+		ConfigPath:          rr.ConfigPath,
+		StdoutLogPath:       rr.StdoutLogPath,
+		StderrLogPath:       rr.StderrLogPath,
+		StartedAt:           rr.StartedAt,
+		LastReconnectAt:     rr.LastReconnectAt,
+		LastReconnectReason: rr.LastReconnectReason,
+		LastTransportError:  rr.LastTransportError,
+		LastError:           rr.LastError,
+		LocalReachable:      rr.LocalReachable,
+		LastTraceSummary:    rr.LastTraceSummary,
+	})
+}
+
+func (r *RuntimeState) UnmarshalJSON(data []byte) error {
+	var raw runtimeStateJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = RuntimeState{
+		SchemaVersion:       raw.SchemaVersion,
+		PID:                 raw.PID,
+		Backend:             raw.Backend,
+		RuntimeFamily:       raw.RuntimeFamily,
+		Transport:           raw.Transport,
+		Mode:                raw.Mode,
+		Phase:               raw.Phase,
+		ListenHost:          raw.ListenHost,
+		ListenPort:          raw.ListenPort,
+		SelectedEndpoint:    raw.SelectedEndpoint,
+		SelectedAddressFam:  raw.SelectedAddressFam,
+		ServiceSocketPath:   raw.ServiceSocketPath,
+		ConfigPath:          raw.ConfigPath,
+		StdoutLogPath:       raw.StdoutLogPath,
+		StderrLogPath:       raw.StderrLogPath,
+		StartedAt:           raw.StartedAt,
+		LastReconnectAt:     raw.LastReconnectAt,
+		LastReconnectReason: raw.LastReconnectReason,
+		LastTransportError:  raw.LastTransportError,
+		LastError:           raw.LastError,
+		LocalReachable:      raw.LocalReachable,
+		LastTraceSummary:    raw.LastTraceSummary,
+	}
+	r.Normalize()
+	return nil
 }
 
 // EndpointCandidate describes a WireGuard peer endpoint under consideration.

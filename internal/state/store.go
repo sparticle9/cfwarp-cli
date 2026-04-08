@@ -107,6 +107,7 @@ func LoadSettings(d Dirs) (Settings, error) {
 
 // SaveRuntime writes rt to runtime.json in d.Runtime.
 func SaveRuntime(d Dirs, rt RuntimeState) error {
+	rt.Normalize()
 	if err := os.MkdirAll(d.Runtime, 0o700); err != nil {
 		return fmt.Errorf("create runtime dir: %w", err)
 	}
@@ -117,7 +118,12 @@ func SaveRuntime(d Dirs, rt RuntimeState) error {
 // Returns ErrNotFound if no backend has been started.
 func LoadRuntime(d Dirs) (RuntimeState, error) {
 	var rt RuntimeState
-	return rt, readJSON(d.RuntimeFile(), &rt)
+	err := readJSON(d.RuntimeFile(), &rt)
+	if err != nil {
+		return rt, err
+	}
+	rt.Normalize()
+	return rt, nil
 }
 
 // ClearRuntime removes the runtime.json and backend config files.

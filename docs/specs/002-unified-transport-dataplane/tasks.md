@@ -12,7 +12,7 @@
   - Add tests for registry lookup, unsupported runtime selection, and backwards-compatible behavior of existing commands.
   - Requirements/design refs: control-plane service model, legacy backend coexistence, migration summary step 1.
 
-- [ ] 3. Add a richer runtime-state model and service-oriented orchestration seam.
+- [x] 3. Add a richer runtime-state model and service-oriented orchestration seam.
   - Extend runtime state beyond PID tracking to capture desired transport/mode, lifecycle phase, listener info, selected endpoint, reconnect metadata, and last transport error.
   - Introduce an internal runtime orchestrator package and a hidden/internal service command or equivalent entrypoint for native runtimes.
   - Add tests for status transitions (`idle`, `connecting`, `connected`, `degraded`, `stopped`) and stale runtime cleanup across external and native runtimes.

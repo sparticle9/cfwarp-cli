@@ -30,6 +30,7 @@ func init() {
 		statusCmd,
 		endpointCmd,
 		versionCmd,
+		serviceCmd,
 	)
 }
 

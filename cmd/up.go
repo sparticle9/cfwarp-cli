@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nexus/cfwarp-cli/internal/backend"
+	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
 	"github.com/nexus/cfwarp-cli/internal/supervisor"
 	"github.com/spf13/cobra"
@@ -66,14 +67,9 @@ foreground (useful for Docker entrypoints).`,
 		fmt.Fprintf(c.OutOrStdout(), "Starting %s (foreground=%v)…\n", sett.Backend, upForeground)
 		info, startErr := b.Start(c.Context(), result, dirs, upForeground)
 
-		rt := state.RuntimeState{
-			PID:           info.PID,
-			Backend:       sett.Backend,
-			ConfigPath:    info.ConfigPath,
-			StdoutLogPath: info.StdoutLogPath,
-			StderrLogPath: info.StderrLogPath,
-			StartedAt:     info.StartedAt,
-			LastError:     info.LastError,
+		rt := orchestrator.BuildRuntimeState(sett, info, dirs)
+		if startErr != nil {
+			orchestrator.MarkStopped(&rt, startErr.Error())
 		}
 
 		// Persist runtime metadata even on error so 'status' can report it.

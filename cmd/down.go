@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
-	"github.com/nexus/cfwarp-cli/internal/supervisor"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ var downCmd = &cobra.Command{
 			return fmt.Errorf("load runtime state: %w", err)
 		}
 
-		if !supervisor.CheckStale(rt) {
+		if !orchestrator.IsRuntimeActive(rt) {
 			fmt.Fprintln(c.OutOrStdout(), "Backend is not running (stale runtime). Cleaning up…")
 			return state.ClearRuntime(dirs)
 		}

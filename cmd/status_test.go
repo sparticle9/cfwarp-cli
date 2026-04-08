@@ -58,10 +58,13 @@ func writeAccount(t *testing.T, d state.Dirs) {
 func writeRuntime(t *testing.T, d state.Dirs, pid int, lastErr string) {
 	t.Helper()
 	rt := state.RuntimeState{
-		PID:       pid,
-		Backend:   "singbox-wireguard",
-		StartedAt: time.Now().UTC(),
-		LastError: lastErr,
+		PID:           pid,
+		Backend:       state.BackendSingboxWireGuard,
+		RuntimeFamily: state.RuntimeFamilyLegacy,
+		Transport:     state.TransportWireGuard,
+		Mode:          state.ModeSocks5,
+		StartedAt:     time.Now().UTC(),
+		LastError:     lastErr,
 	}
 	if err := state.SaveRuntime(d, rt); err != nil {
 		t.Fatalf("save runtime: %v", err)
@@ -126,6 +129,9 @@ func TestStatus_Running(t *testing.T) {
 	if !strings.Contains(out, "running") {
 		t.Errorf("expected 'running', got: %s", out)
 	}
+	if !strings.Contains(out, "phase degraded") {
+		t.Errorf("expected degraded phase in output, got: %s", out)
+	}
 }
 
 // --- stale (crashed) process ---
@@ -144,6 +150,9 @@ func TestStatus_Crashed(t *testing.T) {
 	}
 	if !strings.Contains(out, "exit status 1") {
 		t.Errorf("expected last error in output, got: %s", out)
+	}
+	if !strings.Contains(out, "phase: stopped") {
+		t.Errorf("expected stopped phase in output, got: %s", out)
 	}
 }
 
@@ -201,6 +210,9 @@ func TestStatus_JSON(t *testing.T) {
 	}
 	if report.BackendRunning {
 		t.Error("expected backend_running=false for stale PID")
+	}
+	if report.Phase != state.RuntimePhaseStopped {
+		t.Errorf("expected stopped phase, got %q", report.Phase)
 	}
 }
 
