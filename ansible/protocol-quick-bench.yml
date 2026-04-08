@@ -12,6 +12,10 @@
 # It compares the two WARP transport protocols through the same local SOCKS5 interface:
 #   - wireguard
 #   - masque
+#
+# Important: this is a practical proxy-path comparison, not a transport-pure microbenchmark.
+# Both cases are exercised through SOCKS5 so the results include local proxy/runtime effects
+# in addition to the underlying protocol behavior.
 
 - name: Quick protocol comparison bench
   hosts: warp
@@ -231,7 +235,7 @@
         label: "{{ item.protocol }}"
       changed_when: false
 
-    - name: Summarize quick protocol bench
+    - name: Build quick protocol comparison summary
       ansible.builtin.shell: |
         set -euo pipefail
         python3 - <<PY
@@ -239,9 +243,56 @@
         base = pathlib.Path({{ (bench_root ~ '/' ~ bench_id_resolved) | to_json }})
         wireguard = json.loads((base / 'wireguard.json').read_text())
         masque = json.loads((base / 'masque.json').read_text())
-        print('bench_id={{ bench_id_resolved }}')
-        for data in (wireguard, masque):
-            print(f"{data['protocol']}: median={data['latency_ms']['median']} ms, p95={data['latency_ms']['p95']} ms, mean_dl={data['download_summary']['mean_MiBps']} MiB/s")
+
+        def pct_change(new, old):
+            if old == 0:
+                return None
+            return round((new - old) / old * 100.0, 1)
+
+        comparison = {
+            'bench_id': {{ bench_id_resolved | to_json }},
+            'image': {{ cfwarp_image | to_json }},
+            'protocols': {
+                'wireguard': wireguard,
+                'masque': masque,
+            },
+            'comparison': {
+                'latency_median_ms_delta': round(masque['latency_ms']['median'] - wireguard['latency_ms']['median'], 1),
+                'latency_median_pct_vs_wireguard': pct_change(masque['latency_ms']['median'], wireguard['latency_ms']['median']),
+                'latency_p95_ms_delta': round(masque['latency_ms']['p95'] - wireguard['latency_ms']['p95'], 1),
+                'latency_p95_pct_vs_wireguard': pct_change(masque['latency_ms']['p95'], wireguard['latency_ms']['p95']),
+                'download_mean_MiBps_delta': round(masque['download_summary']['mean_MiBps'] - wireguard['download_summary']['mean_MiBps'], 2),
+                'download_mean_pct_vs_wireguard': pct_change(masque['download_summary']['mean_MiBps'], wireguard['download_summary']['mean_MiBps']),
+            }
+        }
+
+        winner_notes = []
+        if masque['latency_ms']['median'] < wireguard['latency_ms']['median']:
+            winner_notes.append('masque has lower median latency')
+        elif masque['latency_ms']['median'] > wireguard['latency_ms']['median']:
+            winner_notes.append('wireguard has lower median latency')
+        else:
+            winner_notes.append('median latency is tied')
+
+        if masque['download_summary']['mean_MiBps'] > wireguard['download_summary']['mean_MiBps']:
+            winner_notes.append('masque has higher mean download throughput')
+        elif masque['download_summary']['mean_MiBps'] < wireguard['download_summary']['mean_MiBps']:
+            winner_notes.append('wireguard has higher mean download throughput')
+        else:
+            winner_notes.append('mean download throughput is tied')
+
+        comparison['notes'] = winner_notes
+        (base / 'comparison.json').write_text(json.dumps(comparison, indent=2) + '\n')
+        lines = [
+            f"bench_id={comparison['bench_id']}",
+            f"wireguard: median={wireguard['latency_ms']['median']} ms, p95={wireguard['latency_ms']['p95']} ms, mean_dl={wireguard['download_summary']['mean_MiBps']} MiB/s",
+            f"masque: median={masque['latency_ms']['median']} ms, p95={masque['latency_ms']['p95']} ms, mean_dl={masque['download_summary']['mean_MiBps']} MiB/s",
+            f"median latency delta (masque - wireguard): {comparison['comparison']['latency_median_ms_delta']} ms ({comparison['comparison']['latency_median_pct_vs_wireguard']}%)",
+            f"p95 latency delta (masque - wireguard): {comparison['comparison']['latency_p95_ms_delta']} ms ({comparison['comparison']['latency_p95_pct_vs_wireguard']}%)",
+            f"mean download delta (masque - wireguard): {comparison['comparison']['download_mean_MiBps_delta']} MiB/s ({comparison['comparison']['download_mean_pct_vs_wireguard']}%)",
+        ] + comparison['notes']
+        (base / 'comparison.txt').write_text('\n'.join(lines) + '\n')
+        print('\n'.join(lines))
         PY
       args:
         executable: /bin/bash
