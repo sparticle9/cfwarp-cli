@@ -24,7 +24,7 @@
   - Add tests that verify the abstraction supports MTU/address reporting, packet read/write, close behavior, and event delivery.
   - Requirements/design refs: packet transport abstraction, transport layer boundaries.
 
-- [ ] 5. Build the shared native data-plane engine on top of the packet transport abstraction.
+- [x] 5. Build the shared native data-plane engine on top of the packet transport abstraction.
   - Create a reusable engine package that owns userspace stack setup, packet loop wiring, DNS path ownership, and shared counters/errors.
   - Add pooled-buffer utilities and packet-loop tests to validate start/stop behavior, error propagation, and reduced allocation churn.
   - Keep the engine transport-agnostic so both MASQUE now and native WireGuard later can plug into it.
