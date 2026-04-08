@@ -30,7 +30,7 @@
   - Keep the engine transport-agnostic so both MASQUE now and native WireGuard later can plug into it.
   - Requirements/design refs: shared data-plane engine, performance decisions, testing strategy for data-plane tests.
 
-- [ ] 6. Implement native SOCKS5 and HTTP proxy frontends against the shared engine.
+- [x] 6. Implement native SOCKS5 and HTTP proxy frontends against the shared engine.
   - Add frontend packages that expose the engine as SOCKS5 and HTTP/CONNECT listeners without embedding transport-specific setup logic.
   - Support shared auth, listen address, and health reporting behavior driven from the common settings model.
   - Add automated tests for SOCKS TCP/UDP behavior, HTTP CONNECT flows, plain HTTP proxying, auth/no-auth variants, and listener failure paths using fake packet transports.
