@@ -3,6 +3,10 @@ name: Docker
 on:
   workflow_dispatch:
 
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-push:
     name: Build & Push (alpine)

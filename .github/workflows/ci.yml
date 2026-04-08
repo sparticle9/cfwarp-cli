@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test
@@ -54,7 +58,7 @@ jobs:
               -X github.com/nexus/cfwarp-cli/internal/version.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o dist/cfwarp-cli-linux-arm64 .
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v6
         with:
           name: binaries
           path: dist/
