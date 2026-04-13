@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,12 +35,12 @@ func TestDialWithRetry_SucceedsAfterTransientFailure(t *testing.T) {
 	defer func() { connectTunnelFunc = orig }()
 
 	attempts := 0
-	connectTunnelFunc = func(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, error) {
+	connectTunnelFunc = func(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, connectMetrics, error) {
 		attempts++
 		if attempts < 3 {
-			return nil, nil, nil, errors.New("transient connect-ip failure")
+			return nil, nil, nil, connectMetrics{}, errors.New("transient connect-ip failure")
 		}
-		return nil, nil, stubPacketSession{}, nil
+		return nil, nil, stubPacketSession{}, connectMetrics{EndpointFamily: "ipv4", ResolvedEndpoint: endpoint.String()}, nil
 	}
 
 	tun := &tunnel{ctx: context.Background(), cfg: retryTestConfig(t), events: make(chan transport.Event, 16)}
@@ -60,9 +61,9 @@ func TestDialWithRetry_ReturnsLastError(t *testing.T) {
 	defer func() { connectTunnelFunc = orig }()
 
 	attempts := 0
-	connectTunnelFunc = func(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, error) {
+	connectTunnelFunc = func(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, connectMetrics, error) {
 		attempts++
-		return nil, nil, nil, errors.New("still failing")
+		return nil, nil, nil, connectMetrics{}, errors.New("still failing")
 	}
 
 	tun := &tunnel{ctx: context.Background(), cfg: retryTestConfig(t), events: make(chan transport.Event, 16)}
@@ -75,6 +76,46 @@ func TestDialWithRetry_ReturnsLastError(t *testing.T) {
 	}
 }
 
+func TestDial_EmitsEndpointAndMetricsEvents(t *testing.T) {
+	orig := connectTunnelFunc
+	defer func() { connectTunnelFunc = orig }()
+
+	connectTunnelFunc = func(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, connectMetrics, error) {
+		return nil, nil, stubPacketSession{}, connectMetrics{
+			SocketBind:       2 * time.Millisecond,
+			QUICDial:         3 * time.Millisecond,
+			ConnectIPDial:    4 * time.Millisecond,
+			Total:            9 * time.Millisecond,
+			EndpointFamily:   "ipv4",
+			ResolvedEndpoint: endpoint.String(),
+		}, nil
+	}
+
+	tun := &tunnel{ctx: context.Background(), cfg: retryTestConfig(t), events: make(chan transport.Event, 16)}
+	bund, err := tun.dial(context.Background())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if bund == nil || bund.conn == nil {
+		t.Fatal("expected session bundle with packet session")
+	}
+
+	ev1 := <-tun.events
+	ev2 := <-tun.events
+	if ev1.Type != "endpoint_selected" {
+		t.Fatalf("expected first event endpoint_selected, got %q", ev1.Type)
+	}
+	if ev2.Type != "dial_metrics" {
+		t.Fatalf("expected second event dial_metrics, got %q", ev2.Type)
+	}
+	if !containsAll(ev1.Message, []string{"family=ipv4", "162.159.198.1:443"}) {
+		t.Fatalf("unexpected endpoint event message: %s", ev1.Message)
+	}
+	if !containsAll(ev2.Message, []string{"family=ipv4", "bind_ms=2", "quic_ms=3", "connect_ip_ms=4", "total_ms=9"}) {
+		t.Fatalf("unexpected dial metrics event message: %s", ev2.Message)
+	}
+}
+
 func TestStartupBackoff_FloorAndCap(t *testing.T) {
 	tun := &tunnel{cfg: retryTestConfig(t)}
 	if got := tun.startupBackoff(1); got != 2*time.Second {
@@ -83,6 +124,15 @@ func TestStartupBackoff_FloorAndCap(t *testing.T) {
 	if got := tun.startupBackoff(3); got != maxStartupBackoff {
 		t.Fatalf("attempt 3 backoff = %s, want %s", got, maxStartupBackoff)
 	}
+}
+
+func containsAll(s string, parts []string) bool {
+	for _, part := range parts {
+		if !strings.Contains(s, part) {
+			return false
+		}
+	}
+	return true
 }
 
 func retryTestConfig(t *testing.T) transport.StartConfig {

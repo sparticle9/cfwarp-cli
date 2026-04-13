@@ -103,6 +103,20 @@ func TestEngine_ForwardsPacketsBothWays(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+
+	snap := e.Snapshot()
+	if snap.ForwarderStats.StackToTunnel.Packets != 1 || snap.ForwarderStats.StackToTunnel.Bytes != 3 {
+		t.Fatalf("unexpected stack->tunnel stats: %+v", snap.ForwarderStats.StackToTunnel)
+	}
+	if snap.ForwarderStats.TunnelToStack.Packets != 1 || snap.ForwarderStats.TunnelToStack.Bytes != 2 {
+		t.Fatalf("unexpected tunnel->stack stats: %+v", snap.ForwarderStats.TunnelToStack)
+	}
+	if snap.ForwarderStats.StackToTunnel.ReadCalls != 1 || snap.ForwarderStats.StackToTunnel.WriteCalls != 1 {
+		t.Fatalf("expected stack->tunnel read/write calls to be recorded, got %+v", snap.ForwarderStats.StackToTunnel)
+	}
+	if snap.ForwarderStats.TunnelToStack.ReadCalls != 1 || snap.ForwarderStats.TunnelToStack.WriteCalls != 1 {
+		t.Fatalf("expected tunnel->stack read/write calls to be recorded, got %+v", snap.ForwarderStats.TunnelToStack)
+	}
 }
 
 func TestEngine_ReportsForwardingErrors(t *testing.T) {
@@ -144,6 +158,19 @@ func TestEngine_DialAndResolveDelegateToStack(t *testing.T) {
 	}
 	if len(ips) != 1 || ips[0].String() != "10.0.0.1" {
 		t.Fatalf("unexpected resolved IPs: %v", ips)
+	}
+}
+
+func TestEngine_SnapshotIncludesObservedEvent(t *testing.T) {
+	stack := newFakeStack()
+	tun := transport.NewFakeTunnel(1280, nil)
+	e := engine.New(stack, tun)
+	ev := transport.Event{At: time.Now().UTC(), Level: "info", Type: "connected", Message: "hello"}
+	e.ObserveEvent(ev)
+
+	snap := e.Snapshot()
+	if snap.RecentEvent == nil || snap.RecentEvent.Type != ev.Type || snap.RecentEvent.Message != ev.Message {
+		t.Fatalf("unexpected recent event snapshot: %+v", snap.RecentEvent)
 	}
 }
 

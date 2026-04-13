@@ -266,3 +266,42 @@ func TestStatus_JSON_NativeStaleRuntime(t *testing.T) {
 		t.Fatalf("expected stopped phase for stale native runtime, got %q", report.Phase)
 	}
 }
+
+func TestStatus_JSON_IncludesRuntimeDiagnostics(t *testing.T) {
+	d := tempStatusDirs(t)
+	writeAccount(t, d)
+	rt := state.RuntimeState{
+		Backend:            state.BackendNativeMasque,
+		RuntimeFamily:      state.RuntimeFamilyNative,
+		Transport:          state.TransportMasque,
+		Mode:               state.ModeHTTP,
+		Phase:              state.RuntimePhaseConnected,
+		SelectedEndpoint:   "162.159.198.1:443",
+		SelectedAddressFam: "ipv4",
+		StartedAt:          time.Now().UTC(),
+		Diagnostics: &state.RuntimeDiagnostics{
+			Transport:     state.TransportStatsSnapshot{PacketsRead: 7, PacketsWritten: 9},
+			StackToTunnel: state.PacketPathStats{Packets: 7},
+			TunnelToStack: state.PacketPathStats{Packets: 9},
+			Netstack:      state.PacketPathStats{ReadCalls: 7, WriteCalls: 9},
+		},
+	}
+	if err := state.SaveRuntime(d, rt); err != nil {
+		t.Fatalf("save runtime: %v", err)
+	}
+
+	out, err := execStatus(t, d, "--json", "--runtime-family", "native", "--transport", "masque", "--mode", "http")
+	if err != nil {
+		t.Fatalf("status --json: %v", err)
+	}
+	var report StatusReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("unmarshal JSON: %v\noutput: %s", err, out)
+	}
+	if report.SelectedEndpoint != "162.159.198.1:443" || report.SelectedAddressFamily != "ipv4" {
+		t.Fatalf("expected selected endpoint metadata, got %+v", report)
+	}
+	if report.Diagnostics == nil || report.Diagnostics.Transport.PacketsRead != 7 || report.Diagnostics.Netstack.WriteCalls != 9 {
+		t.Fatalf("expected runtime diagnostics in report, got %+v", report.Diagnostics)
+	}
+}

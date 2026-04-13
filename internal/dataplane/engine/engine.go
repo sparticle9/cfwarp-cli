@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nexus/cfwarp-cli/internal/transport"
@@ -63,6 +64,11 @@ type Engine struct {
 	cancel context.CancelFunc
 	errCh  chan error
 	once   sync.Once
+
+	stackToTunnel pathCounters
+	tunnelToStack pathCounters
+	lastEventMu   sync.RWMutex
+	lastEvent     *transport.Event
 }
 
 func New(stack NetworkStack, tunnel transport.PacketTunnel) *Engine {
@@ -96,6 +102,67 @@ func (e *Engine) ResolveIP(ctx context.Context, host string) ([]net.IP, error) {
 
 func (e *Engine) MTU() int { return e.tunnel.MTU() }
 
+type PathStats struct {
+	Packets      uint64
+	Bytes        uint64
+	ReadCalls    uint64
+	ReadNanos    uint64
+	WriteCalls   uint64
+	WriteNanos   uint64
+	LastPacketAt time.Time
+}
+
+type ForwarderStats struct {
+	StackToTunnel PathStats
+	TunnelToStack PathStats
+	CapturedAt    time.Time
+}
+
+type pathCounters struct {
+	packets    atomic.Uint64
+	bytes      atomic.Uint64
+	readCalls  atomic.Uint64
+	readNanos  atomic.Uint64
+	writeCalls atomic.Uint64
+	writeNanos atomic.Uint64
+	lastPacket atomic.Int64
+}
+
+func (p *pathCounters) observeRead(n int, d time.Duration) {
+	p.readCalls.Add(1)
+	p.readNanos.Add(uint64(d))
+	p.packets.Add(1)
+	p.bytes.Add(uint64(n))
+	p.lastPacket.Store(time.Now().UTC().UnixNano())
+}
+
+func (p *pathCounters) observeWrite(d time.Duration) {
+	p.writeCalls.Add(1)
+	p.writeNanos.Add(uint64(d))
+}
+
+func (p *pathCounters) snapshot() PathStats {
+	stats := PathStats{
+		Packets:    p.packets.Load(),
+		Bytes:      p.bytes.Load(),
+		ReadCalls:  p.readCalls.Load(),
+		ReadNanos:  p.readNanos.Load(),
+		WriteCalls: p.writeCalls.Load(),
+		WriteNanos: p.writeNanos.Load(),
+	}
+	if ts := p.lastPacket.Load(); ts > 0 {
+		stats.LastPacketAt = time.Unix(0, ts).UTC()
+	}
+	return stats
+}
+
+func (e *Engine) ObserveEvent(ev transport.Event) {
+	e.lastEventMu.Lock()
+	defer e.lastEventMu.Unlock()
+	cpy := ev
+	e.lastEvent = &cpy
+}
+
 func (e *Engine) Close() error {
 	var err error
 	e.once.Do(func() {
@@ -123,17 +190,21 @@ func (e *Engine) forwardStackToTunnel() {
 		}
 
 		buf := e.pool.Get()
+		readStarted := time.Now()
 		n, err := e.stack.ReadPacket(buf)
 		if err != nil {
 			e.pool.Put(buf)
 			e.reportError(fmt.Errorf("read from stack: %w", err))
 			return
 		}
+		e.stackToTunnel.observeRead(n, time.Since(readStarted))
+		writeStarted := time.Now()
 		if err := e.tunnel.WritePacket(buf[:n]); err != nil {
 			e.pool.Put(buf)
 			e.reportError(fmt.Errorf("write to tunnel: %w", err))
 			return
 		}
+		e.stackToTunnel.observeWrite(time.Since(writeStarted))
 		e.pool.Put(buf)
 	}
 }
@@ -147,17 +218,21 @@ func (e *Engine) forwardTunnelToStack() {
 		}
 
 		buf := e.pool.Get()
+		readStarted := time.Now()
 		n, err := e.tunnel.ReadPacket(buf)
 		if err != nil {
 			e.pool.Put(buf)
 			e.reportError(fmt.Errorf("read from tunnel: %w", err))
 			return
 		}
+		e.tunnelToStack.observeRead(n, time.Since(readStarted))
+		writeStarted := time.Now()
 		if err := e.stack.WritePacket(buf[:n]); err != nil {
 			e.pool.Put(buf)
 			e.reportError(fmt.Errorf("write to stack: %w", err))
 			return
 		}
+		e.tunnelToStack.observeWrite(time.Since(writeStarted))
 		e.pool.Put(buf)
 	}
 }
@@ -172,20 +247,27 @@ func (e *Engine) reportError(err error) {
 // Snapshot returns a lightweight packet+event view suitable for status reporting.
 type Snapshot struct {
 	TransportStats transport.Stats  `json:"transport_stats"`
+	ForwarderStats ForwarderStats   `json:"forwarder_stats"`
 	RecentEvent    *transport.Event `json:"recent_event,omitempty"`
 	CapturedAt     time.Time        `json:"captured_at"`
 }
 
 func (e *Engine) Snapshot() Snapshot {
+	e.lastEventMu.RLock()
 	var recent *transport.Event
-	select {
-	case ev := <-e.tunnel.Events():
-		recent = &ev
-	default:
+	if e.lastEvent != nil {
+		cpy := *e.lastEvent
+		recent = &cpy
 	}
+	e.lastEventMu.RUnlock()
 	return Snapshot{
 		TransportStats: e.tunnel.Stats(),
-		RecentEvent:    recent,
-		CapturedAt:     time.Now().UTC(),
+		ForwarderStats: ForwarderStats{
+			StackToTunnel: e.stackToTunnel.snapshot(),
+			TunnelToStack: e.tunnelToStack.snapshot(),
+			CapturedAt:    time.Now().UTC(),
+		},
+		RecentEvent: recent,
+		CapturedAt:  time.Now().UTC(),
 	}
 }

@@ -149,6 +149,76 @@ func applyEnv(s *state.Settings) {
 	if v := os.Getenv("CFWARP_LOG_LEVEL"); v != "" {
 		s.LogLevel = strings.ToLower(v)
 	}
+	applyMasqueEnv(s)
+}
+
+func applyMasqueEnv(s *state.Settings) {
+	var touched bool
+	ensureMasqueOptions := func() *state.MasqueOptions {
+		if s.MasqueOptions == nil {
+			s.MasqueOptions = &state.MasqueOptions{}
+		}
+		touched = true
+		return s.MasqueOptions
+	}
+	if v := os.Getenv("CFWARP_MASQUE_SNI"); v != "" {
+		o := ensureMasqueOptions()
+		o.SNI = v
+	}
+	if v := os.Getenv("CFWARP_MASQUE_CONNECT_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			o := ensureMasqueOptions()
+			o.ConnectPort = p
+		}
+	}
+	if v := os.Getenv("CFWARP_MASQUE_USE_IPV6"); v != "" {
+		if parsed, ok := parseBool(v); ok {
+			o := ensureMasqueOptions()
+			o.UseIPv6 = parsed
+		}
+	}
+	if v := os.Getenv("CFWARP_MASQUE_MTU"); v != "" {
+		if mtu, err := strconv.Atoi(v); err == nil {
+			o := ensureMasqueOptions()
+			o.MTU = mtu
+		}
+	}
+	if v := os.Getenv("CFWARP_MASQUE_INITIAL_PACKET_SIZE"); v != "" {
+		if size, err := strconv.Atoi(v); err == nil && size >= 0 && size <= 65535 {
+			o := ensureMasqueOptions()
+			o.InitialPacketSize = uint16(size)
+		}
+	}
+	if v := os.Getenv("CFWARP_MASQUE_KEEPALIVE_SECONDS"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil {
+			o := ensureMasqueOptions()
+			o.KeepAlivePeriodSeconds = sec
+		}
+	}
+	if v := os.Getenv("CFWARP_MASQUE_RECONNECT_DELAY_MILLIS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil {
+			o := ensureMasqueOptions()
+			o.ReconnectDelayMillis = ms
+		}
+	}
+	if !touched && s.MasqueOptions != nil && isZeroMasqueOptions(*s.MasqueOptions) {
+		s.MasqueOptions = nil
+	}
+}
+
+func parseBool(v string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func isZeroMasqueOptions(o state.MasqueOptions) bool {
+	return o.SNI == "" && o.ConnectPort == 0 && !o.UseIPv6 && o.MTU == 0 && o.InitialPacketSize == 0 && o.KeepAlivePeriodSeconds == 0 && o.ReconnectDelayMillis == 0
 }
 
 // applyOverrides applies non-nil pointer fields from overrides onto s.

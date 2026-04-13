@@ -227,6 +227,14 @@ func TestSaveLoadRuntime(t *testing.T) {
 		SelectedEndpoint:   "162.159.192.1:2408",
 		LastTransportError: "",
 		StartedAt:          time.Now().UTC().Truncate(time.Second),
+		Diagnostics: &state.RuntimeDiagnostics{
+			CapturedAt:    time.Now().UTC().Truncate(time.Second),
+			LastEvent:     &state.RuntimeEventSnapshot{At: time.Now().UTC().Truncate(time.Second), Level: "info", Type: "connected", Message: "ready"},
+			Transport:     state.TransportStatsSnapshot{PacketsRead: 10, PacketsWritten: 12, BytesRead: 1400, BytesWritten: 1500, LastActivityAt: time.Now().UTC().Truncate(time.Second)},
+			StackToTunnel: state.PacketPathStats{Packets: 10, Bytes: 1400, ReadCalls: 10, WriteCalls: 10},
+			TunnelToStack: state.PacketPathStats{Packets: 12, Bytes: 1500, ReadCalls: 12, WriteCalls: 12},
+			Netstack:      state.PacketPathStats{Packets: 22, Bytes: 2900, ReadCalls: 10, WriteCalls: 12},
+		},
 	}
 
 	if err := state.SaveRuntime(d, rt); err != nil {
@@ -247,6 +255,9 @@ func TestSaveLoadRuntime(t *testing.T) {
 	}
 	if got.Phase != state.RuntimePhaseConnected {
 		t.Errorf("expected connected phase, got %q", got.Phase)
+	}
+	if got.Diagnostics == nil || got.Diagnostics.Transport.PacketsRead != 10 || got.Diagnostics.LastEvent == nil || got.Diagnostics.LastEvent.Type != "connected" {
+		t.Fatalf("expected runtime diagnostics to round-trip, got %+v", got.Diagnostics)
 	}
 }
 

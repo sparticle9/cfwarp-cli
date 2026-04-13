@@ -17,20 +17,23 @@ var statusTrace bool
 
 // StatusReport is the machine-readable status output.
 type StatusReport struct {
-	AccountConfigured  bool   `json:"account_configured"`
-	BackendRunning     bool   `json:"backend_running"`
-	LocalReachable     bool   `json:"local_reachable"`
-	PID                int    `json:"pid,omitempty"`
-	Backend            string `json:"backend,omitempty"`
-	RuntimeFamily      string `json:"runtime_family,omitempty"`
-	Transport          string `json:"transport,omitempty"`
-	Mode               string `json:"mode,omitempty"`
-	Phase              string `json:"phase,omitempty"`
-	ListenAddr         string `json:"listen_addr,omitempty"`
-	StartedAt          string `json:"started_at,omitempty"`
-	LastError          string `json:"last_error,omitempty"`
-	LastTransportError string `json:"last_transport_error,omitempty"`
-	WARPVerified       *bool  `json:"warp_verified,omitempty"`
+	AccountConfigured     bool                      `json:"account_configured"`
+	BackendRunning        bool                      `json:"backend_running"`
+	LocalReachable        bool                      `json:"local_reachable"`
+	PID                   int                       `json:"pid,omitempty"`
+	Backend               string                    `json:"backend,omitempty"`
+	RuntimeFamily         string                    `json:"runtime_family,omitempty"`
+	Transport             string                    `json:"transport,omitempty"`
+	Mode                  string                    `json:"mode,omitempty"`
+	Phase                 string                    `json:"phase,omitempty"`
+	ListenAddr            string                    `json:"listen_addr,omitempty"`
+	StartedAt             string                    `json:"started_at,omitempty"`
+	SelectedEndpoint      string                    `json:"selected_endpoint,omitempty"`
+	SelectedAddressFamily string                    `json:"selected_address_family,omitempty"`
+	LastError             string                    `json:"last_error,omitempty"`
+	LastTransportError    string                    `json:"last_transport_error,omitempty"`
+	Diagnostics           *state.RuntimeDiagnostics `json:"diagnostics,omitempty"`
+	WARPVerified          *bool                     `json:"warp_verified,omitempty"`
 }
 
 var statusCmd = &cobra.Command{
@@ -60,8 +63,11 @@ Use --trace to also probe cdn-cgi/trace through the proxy (requires live network
 			report.Transport = rt.Transport
 			report.Mode = rt.Mode
 			report.Phase = rt.Phase
+			report.SelectedEndpoint = rt.SelectedEndpoint
+			report.SelectedAddressFamily = rt.SelectedAddressFam
 			report.LastError = rt.LastError
 			report.LastTransportError = rt.LastTransportError
+			report.Diagnostics = rt.Diagnostics
 			if !rt.StartedAt.IsZero() {
 				report.StartedAt = rt.StartedAt.Format(time.RFC3339)
 			}
@@ -179,8 +185,21 @@ func printHuman(c *cobra.Command, r StatusReport, accErr, rtErr error) {
 		}
 	}
 
+	if r.SelectedEndpoint != "" {
+		fmt.Fprintf(c.OutOrStdout(), "Endpoint: %s (%s)\n", r.SelectedEndpoint, r.SelectedAddressFamily)
+	}
 	if r.LastTransportError != "" {
 		fmt.Fprintf(c.OutOrStdout(), "Transport: last error: %s\n", r.LastTransportError)
+	}
+	if r.Diagnostics != nil {
+		fmt.Fprintf(c.OutOrStdout(), "Data plane: transport rx/tx=%d/%d packets, engine s->t=%d packets, t->s=%d packets, netstack calls r/w=%d/%d\n",
+			r.Diagnostics.Transport.PacketsRead,
+			r.Diagnostics.Transport.PacketsWritten,
+			r.Diagnostics.StackToTunnel.Packets,
+			r.Diagnostics.TunnelToStack.Packets,
+			r.Diagnostics.Netstack.ReadCalls,
+			r.Diagnostics.Netstack.WriteCalls,
+		)
 	}
 
 	// WARP trace (optional)

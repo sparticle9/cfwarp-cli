@@ -39,6 +39,15 @@ const (
 
 var connectTunnelFunc = connectTunnel
 
+type connectMetrics struct {
+	SocketBind       time.Duration
+	QUICDial         time.Duration
+	ConnectIPDial    time.Duration
+	Total            time.Duration
+	EndpointFamily   string
+	ResolvedEndpoint string
+}
+
 // packetSession abstracts the session operations needed by the tunnel.
 type packetSession interface {
 	ReadPacket(b []byte, nonBlocking bool) (int, error)
@@ -314,11 +323,24 @@ func (t *tunnel) dial(ctx context.Context) (*sessionBundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	udpConn, h3t, ipConn, err := connectTunnelFunc(ctx, tlsConfig, quicConfig, t.cfg.Masque.ConnectURI, endpoint)
+	family := endpointFamily(endpoint)
+	t.emit("info", "endpoint_selected", fmt.Sprintf("MASQUE endpoint family=%s addr=%s", family, endpoint.String()))
+	udpConn, h3t, ipConn, metrics, err := connectTunnelFunc(ctx, tlsConfig, quicConfig, t.cfg.Masque.ConnectURI, endpoint)
 	if err != nil {
 		return nil, err
 	}
+	t.emit("info", "dial_metrics", fmt.Sprintf("MASQUE dial endpoint=%s family=%s bind_ms=%d quic_ms=%d connect_ip_ms=%d total_ms=%d", metrics.ResolvedEndpoint, metrics.EndpointFamily, metrics.SocketBind.Milliseconds(), metrics.QUICDial.Milliseconds(), metrics.ConnectIPDial.Milliseconds(), metrics.Total.Milliseconds()))
 	return &sessionBundle{udpConn: udpConn, h3: h3t, conn: ipConn}, nil
+}
+
+func endpointFamily(endpoint *net.UDPAddr) string {
+	if endpoint == nil || endpoint.IP == nil {
+		return "unknown"
+	}
+	if endpoint.IP.To4() != nil {
+		return "ipv4"
+	}
+	return "ipv6"
 }
 
 func (t *tunnel) emit(level, typ, msg string) {
@@ -443,7 +465,10 @@ func resolveEndpoint(cfg transport.MasqueConfig, override string) (*net.UDPAddr,
 	return &net.UDPAddr{IP: ip, Port: port}, nil
 }
 
-func connectTunnel(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, error) {
+func connectTunnel(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.Config, connectURI string, endpoint *net.UDPAddr) (*net.UDPConn, *http3.Transport, packetSession, connectMetrics, error) {
+	metrics := connectMetrics{EndpointFamily: endpointFamily(endpoint), ResolvedEndpoint: endpoint.String()}
+	start := time.Now()
+	bindStart := time.Now()
 	var udpConn *net.UDPConn
 	var err error
 	if endpoint.IP.To4() == nil {
@@ -451,13 +476,17 @@ func connectTunnel(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.
 	} else {
 		udpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	}
+	metrics.SocketBind = time.Since(bindStart)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, metrics, err
 	}
+	quicStart := time.Now()
 	conn, err := quic.Dial(ctx, udpConn, endpoint, tlsConfig, quicConfig)
+	metrics.QUICDial = time.Since(quicStart)
 	if err != nil {
 		udpConn.Close()
-		return nil, nil, nil, err
+		metrics.Total = time.Since(start)
+		return nil, nil, nil, metrics, err
 	}
 	tr := &http3.Transport{
 		EnableDatagrams: true,
@@ -469,19 +498,22 @@ func connectTunnel(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.
 	clientConn := tr.NewClientConn(conn)
 	additionalHeaders := http.Header{"User-Agent": []string{""}}
 	tmpl := uritemplate.MustNew(connectURI)
+	connectIPStart := time.Now()
 	ipConn, rsp, err := connectip.Dial(ctx, clientConn, tmpl, cfConnectProtocol, additionalHeaders, true)
+	metrics.ConnectIPDial = time.Since(connectIPStart)
+	metrics.Total = time.Since(start)
 	if err != nil {
 		tr.Close()
 		udpConn.Close()
-		return nil, nil, nil, fmt.Errorf("dial connect-ip: %w", err)
+		return nil, nil, nil, metrics, fmt.Errorf("dial connect-ip: %w", err)
 	}
 	if rsp.StatusCode != http.StatusOK {
 		ipConn.Close()
 		tr.Close()
 		udpConn.Close()
-		return nil, nil, nil, fmt.Errorf("connect-ip handshake returned %s", rsp.Status)
+		return nil, nil, nil, metrics, fmt.Errorf("connect-ip handshake returned %s", rsp.Status)
 	}
-	return udpConn, tr, ipConn, nil
+	return udpConn, tr, ipConn, metrics, nil
 }
 
 // GenerateECDSAKeypairDER returns base64 DER private/public key encodings suitable for MASQUE enrollment.

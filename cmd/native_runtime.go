@@ -3,10 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,12 +17,15 @@ import (
 	httpproxy "github.com/nexus/cfwarp-cli/internal/dataplane/frontend/http"
 	"github.com/nexus/cfwarp-cli/internal/dataplane/frontend/socks"
 	netstackdp "github.com/nexus/cfwarp-cli/internal/dataplane/netstack"
+	"github.com/nexus/cfwarp-cli/internal/health"
 	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
 	"github.com/nexus/cfwarp-cli/internal/transport"
 	masquetransport "github.com/nexus/cfwarp-cli/internal/transport/masque"
 	"github.com/spf13/cobra"
 )
+
+const runtimeSnapshotInterval = 5 * time.Second
 
 func runNativeRuntime(ctx context.Context, dirs state.Dirs, cmd *cobra.Command) error {
 	acc, err := state.LoadAccount(dirs)
@@ -59,6 +65,25 @@ func runNativeRuntime(ctx context.Context, dirs state.Dirs, cmd *cobra.Command) 
 	defer eng.Close()
 
 	listenAddr := fmt.Sprintf("%s:%d", sett.ListenHost, sett.ListenPort)
+	tracker := newRuntimeTracker(dirs, sett)
+	tracker.persistSnapshot(eng, stack)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-tun.Events():
+				if !ok {
+					return
+				}
+				eng.ObserveEvent(ev)
+				tracker.recordEvent(ev)
+				log.Printf("transport event level=%s type=%s msg=%s", ev.Level, ev.Type, ev.Message)
+			}
+		}
+	}()
+
 	var closeFn func() error
 	serveErrCh := make(chan error, 1)
 	switch sett.Mode {
@@ -89,20 +114,39 @@ func runNativeRuntime(ctx context.Context, dirs state.Dirs, cmd *cobra.Command) 
 	}
 	defer os.Remove(socketPath)
 
+	tracker.setServiceSocket(socketPath)
+
+	go func() {
+		ticker := time.NewTicker(runtimeSnapshotInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				tracker.persistSnapshot(eng, stack)
+			}
+		}
+	}()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
+	var exitErr error
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		exitErr = ctx.Err()
 	case sig := <-sigCh:
-		return fmt.Errorf("received signal %s", sig)
+		exitErr = fmt.Errorf("received signal %s", sig)
 	case err := <-eng.Errors():
-		return err
+		exitErr = err
 	case err := <-serveErrCh:
-		return err
+		exitErr = err
 	}
+
+	tracker.stop(exitErr)
+	return exitErr
 }
 
 func buildMasqueStartConfig(acc state.AccountState, sett state.Settings) (transport.StartConfig, error) {
@@ -134,6 +178,158 @@ func buildMasqueStartConfig(acc state.AccountState, sett state.Settings) (transp
 		cfg.Masque.ReconnectDelay = durationMillis(sett.MasqueOptions.ReconnectDelayMillis)
 	}
 	return cfg, nil
+}
+
+type runtimeTracker struct {
+	dirs state.Dirs
+	mu   sync.Mutex
+	rt   state.RuntimeState
+}
+
+func newRuntimeTracker(dirs state.Dirs, sett state.Settings) *runtimeTracker {
+	rt, err := state.LoadRuntime(dirs)
+	if err != nil {
+		rt = state.RuntimeState{}
+	}
+	rt.Normalize()
+	rt.Backend = sett.Backend
+	rt.RuntimeFamily = sett.RuntimeFamily
+	rt.Transport = sett.Transport
+	rt.Mode = sett.Mode
+	rt.ListenHost = sett.ListenHost
+	rt.ListenPort = sett.ListenPort
+	if rt.Phase == "" || rt.Phase == state.RuntimePhaseIdle {
+		rt.Phase = state.RuntimePhaseConnecting
+	}
+	return &runtimeTracker{dirs: dirs, rt: rt}
+}
+
+func (t *runtimeTracker) setServiceSocket(path string) {
+	t.update(func(rt *state.RuntimeState) {
+		rt.ServiceSocketPath = path
+	})
+}
+
+func (t *runtimeTracker) recordEvent(ev transport.Event) {
+	t.update(func(rt *state.RuntimeState) {
+		if rt.Diagnostics == nil {
+			rt.Diagnostics = &state.RuntimeDiagnostics{}
+		}
+		rt.Diagnostics.LastEvent = &state.RuntimeEventSnapshot{
+			At:      ev.At,
+			Level:   ev.Level,
+			Type:    ev.Type,
+			Message: ev.Message,
+		}
+		switch ev.Type {
+		case "endpoint_selected":
+			rt.SelectedAddressFam = parseEventField(ev.Message, "family")
+			rt.SelectedEndpoint = parseEventField(ev.Message, "addr")
+		case "retry", "reconnect":
+			orchestrator.MarkTransportError(rt, ev.Message, ev.At)
+		case "connected", "reconnected":
+			rt.LastTransportError = ""
+			if rt.LocalReachable {
+				rt.Phase = state.RuntimePhaseConnected
+			} else {
+				rt.Phase = state.RuntimePhaseConnecting
+			}
+		}
+	})
+}
+
+func (t *runtimeTracker) persistSnapshot(eng *engine.Engine, stack *netstackdp.Stack) {
+	snap := eng.Snapshot()
+	netStats := stack.Stats()
+	t.update(func(rt *state.RuntimeState) {
+		if rt.Diagnostics == nil {
+			rt.Diagnostics = &state.RuntimeDiagnostics{}
+		}
+		rt.LocalReachable = health.ProbeLocal(rt.ListenHost, rt.ListenPort, 0)
+		if rt.LastTransportError != "" {
+			rt.Phase = state.RuntimePhaseDegraded
+		} else if rt.LocalReachable {
+			rt.Phase = state.RuntimePhaseConnected
+		} else if rt.Phase == "" || rt.Phase == state.RuntimePhaseIdle {
+			rt.Phase = state.RuntimePhaseConnecting
+		}
+		rt.Diagnostics.CapturedAt = time.Now().UTC()
+		rt.Diagnostics.Transport = state.TransportStatsSnapshot{
+			PacketsRead:    snap.TransportStats.PacketsRead,
+			PacketsWritten: snap.TransportStats.PacketsWritten,
+			BytesRead:      snap.TransportStats.BytesRead,
+			BytesWritten:   snap.TransportStats.BytesWritten,
+			LastActivityAt: snap.TransportStats.LastActivityAt,
+		}
+		rt.Diagnostics.StackToTunnel = state.PacketPathStats{
+			Packets:      snap.ForwarderStats.StackToTunnel.Packets,
+			Bytes:        snap.ForwarderStats.StackToTunnel.Bytes,
+			ReadCalls:    snap.ForwarderStats.StackToTunnel.ReadCalls,
+			ReadNanos:    snap.ForwarderStats.StackToTunnel.ReadNanos,
+			WriteCalls:   snap.ForwarderStats.StackToTunnel.WriteCalls,
+			WriteNanos:   snap.ForwarderStats.StackToTunnel.WriteNanos,
+			LastPacketAt: snap.ForwarderStats.StackToTunnel.LastPacketAt,
+		}
+		rt.Diagnostics.TunnelToStack = state.PacketPathStats{
+			Packets:      snap.ForwarderStats.TunnelToStack.Packets,
+			Bytes:        snap.ForwarderStats.TunnelToStack.Bytes,
+			ReadCalls:    snap.ForwarderStats.TunnelToStack.ReadCalls,
+			ReadNanos:    snap.ForwarderStats.TunnelToStack.ReadNanos,
+			WriteCalls:   snap.ForwarderStats.TunnelToStack.WriteCalls,
+			WriteNanos:   snap.ForwarderStats.TunnelToStack.WriteNanos,
+			LastPacketAt: snap.ForwarderStats.TunnelToStack.LastPacketAt,
+		}
+		rt.Diagnostics.Netstack = state.PacketPathStats{
+			Packets:      netStats.Packets,
+			Bytes:        netStats.Bytes,
+			ReadCalls:    netStats.ReadCalls,
+			ReadNanos:    netStats.ReadNanos,
+			WriteCalls:   netStats.WriteCalls,
+			WriteNanos:   netStats.WriteNanos,
+			LastPacketAt: netStats.LastPacketAt,
+		}
+		if snap.RecentEvent != nil {
+			rt.Diagnostics.LastEvent = &state.RuntimeEventSnapshot{
+				At:      snap.RecentEvent.At,
+				Level:   snap.RecentEvent.Level,
+				Type:    snap.RecentEvent.Type,
+				Message: snap.RecentEvent.Message,
+			}
+		}
+	})
+}
+
+func (t *runtimeTracker) stop(err error) {
+	t.update(func(rt *state.RuntimeState) {
+		orchestrator.MarkStopped(rt, errorString(err))
+	})
+}
+
+func (t *runtimeTracker) update(fn func(*state.RuntimeState)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fn(&t.rt)
+	t.rt.Normalize()
+	if err := state.SaveRuntime(t.dirs, t.rt); err != nil {
+		log.Printf("warning: persist runtime state: %v", err)
+	}
+}
+
+func parseEventField(msg, key string) string {
+	prefix := key + "="
+	for _, part := range strings.Fields(msg) {
+		if strings.HasPrefix(part, prefix) {
+			return strings.TrimPrefix(part, prefix)
+		}
+	}
+	return ""
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func localPrefixes(ipv4, ipv6 string) ([]netip.Prefix, error) {

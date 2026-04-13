@@ -42,8 +42,8 @@ The codebase is currently oriented around three practical deployment patterns:
    - useful when the application itself does not support proxy configuration well
 
 3. **Implementation comparison / battle testing**
-   - compare multiple published images under one repeatable harness
-   - currently includes `cfwarp-cli` variants and the original `MicroWARP`
+   - compare multiple published images and upstream implementations under one repeatable harness
+   - currently includes `cfwarp-cli` variants, the original `MicroWARP`, and vanilla `usque` in the protocol-focused real-target bench
 
 ## Performance comparison philosophy
 
@@ -75,6 +75,7 @@ This matters because the fastest raw tunnel is not always the best fit for real 
 - `docs/benchmark-package.md` — entry point for sharing the benchmark work internally
 - `docs/benchmark-mechanism.md` — benchmark harness design, phases, and result semantics
 - `docs/benchmark-report-case.md` — interpretation of the latest benchmark set for the intended workload mix
+- `docs/status/2026-04-native-masque-status.md` — public status memo for native MASQUE support
 - `docs/specs/001-minimal-wireguard-proxy/requirements.md` — MVP requirements
 - `docs/specs/001-minimal-wireguard-proxy/design.md` — MVP design and Docker deployment
 - `docs/specs/001-minimal-wireguard-proxy/tasks.md` — incremental implementation plan
@@ -88,6 +89,7 @@ Implemented today:
 - manual Alpine package workflow for branch builds
 - published-image benchmark harness
 - comparison against original `MicroWARP`
+- protocol-focused real-target bench with vanilla `usque`, remote `iperf3`, and remote HTTP transfer
 - raw tunnel + API-like workload benchmarking
 - markdown/JSON report generation with per-container resource summaries
 
@@ -97,3 +99,38 @@ Not implemented yet:
 - broader native runtime packaging and docs beyond the current Alpine-first path
 - chart generation in the reporting pipeline
 - broader provider/backend families beyond the current WARP-focused scope
+
+## Project status
+
+Current stable path:
+
+- `singbox-wireguard`
+
+Current experimental path:
+
+- native MASQUE
+
+Recent MASQUE work completed:
+
+- control-plane and runtime support for native MASQUE
+- runtime instrumentation and diagnostics
+- tuning knobs and protocol bench coverage
+- comparative evaluation against WireGuard and upstream `usque`
+
+Current state:
+
+- native MASQUE support is real and usable for continued development
+- branch stable
+- tests green
+- benchmark evidence directional, not final
+- contributor help wanted on startup retry, endpoint family strategy, dataplane profiling, and packaging/docs
+
+See:
+
+- `docs/status/2026-04-native-masque-status.md`
+- `docs/native-masque-vs-singbox-review.md`
+- `CONTRIBUTING.md`
+
+## Contributing
+
+See `CONTRIBUTING.md` for test, benchmark, and review workflow.

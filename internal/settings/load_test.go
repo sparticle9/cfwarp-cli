@@ -228,3 +228,44 @@ func TestLoad_NativeRuntimeSelection(t *testing.T) {
 		t.Fatalf("unexpected native runtime selection: %+v", s)
 	}
 }
+
+func TestLoad_MasqueEnvOptions(t *testing.T) {
+	d := tempDirs(t)
+	t.Setenv("CFWARP_RUNTIME_FAMILY", "native")
+	t.Setenv("CFWARP_TRANSPORT", "masque")
+	t.Setenv("CFWARP_MASQUE_SNI", "example.com")
+	t.Setenv("CFWARP_MASQUE_CONNECT_PORT", "8443")
+	t.Setenv("CFWARP_MASQUE_USE_IPV6", "true")
+	t.Setenv("CFWARP_MASQUE_MTU", "1400")
+	t.Setenv("CFWARP_MASQUE_INITIAL_PACKET_SIZE", "1300")
+	t.Setenv("CFWARP_MASQUE_KEEPALIVE_SECONDS", "45")
+	t.Setenv("CFWARP_MASQUE_RECONNECT_DELAY_MILLIS", "2500")
+
+	s, err := settings.Load(d, settings.Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.MasqueOptions == nil {
+		t.Fatal("expected masque options to be populated")
+	}
+	if s.MasqueOptions.SNI != "example.com" || s.MasqueOptions.ConnectPort != 8443 || !s.MasqueOptions.UseIPv6 || s.MasqueOptions.MTU != 1400 || s.MasqueOptions.InitialPacketSize != 1300 || s.MasqueOptions.KeepAlivePeriodSeconds != 45 || s.MasqueOptions.ReconnectDelayMillis != 2500 {
+		t.Fatalf("unexpected masque options: %+v", *s.MasqueOptions)
+	}
+}
+
+func TestLoad_MasqueEnvInvalidValuesIgnored(t *testing.T) {
+	d := tempDirs(t)
+	t.Setenv("CFWARP_RUNTIME_FAMILY", "native")
+	t.Setenv("CFWARP_TRANSPORT", "masque")
+	t.Setenv("CFWARP_MASQUE_CONNECT_PORT", "not-a-number")
+	t.Setenv("CFWARP_MASQUE_USE_IPV6", "maybe")
+	t.Setenv("CFWARP_MASQUE_INITIAL_PACKET_SIZE", "999999")
+
+	s, err := settings.Load(d, settings.Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.MasqueOptions != nil {
+		t.Fatalf("expected invalid masque env vars to be ignored, got %+v", *s.MasqueOptions)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"golang.zx2c4.com/wireguard/tun"
 	wgnetstack "golang.zx2c4.com/wireguard/tun/netstack"
@@ -18,6 +20,17 @@ var defaultDNSServers = []netip.Addr{
 	netip.MustParseAddr("2606:4700:4700::1001"),
 }
 
+// Stats captures low-overhead packet-device counters and call timings for the userspace netstack edge.
+type Stats struct {
+	Packets      uint64
+	Bytes        uint64
+	ReadCalls    uint64
+	ReadNanos    uint64
+	WriteCalls   uint64
+	WriteNanos   uint64
+	LastPacketAt time.Time
+}
+
 // Stack adapts wireguard-go's userspace netstack to the shared data-plane interfaces.
 type Stack struct {
 	dev tun.Device
@@ -25,6 +38,14 @@ type Stack struct {
 
 	readBufPool sync.Pool
 	readSzPool  sync.Pool
+
+	packets    atomic.Uint64
+	bytes      atomic.Uint64
+	readCalls  atomic.Uint64
+	readNanos  atomic.Uint64
+	writeCalls atomic.Uint64
+	writeNanos atomic.Uint64
+	lastPacket atomic.Int64
 }
 
 func New(addresses []netip.Prefix, mtu int) (*Stack, error) {
@@ -59,16 +80,32 @@ func (s *Stack) ReadPacket(buf []byte) (int, error) {
 		s.readSzPool.Put(sizesPtr)
 	}()
 	(*bufsPtr)[0] = buf
+	started := time.Now()
 	_, err := s.dev.Read(*bufsPtr, *sizesPtr, 0)
 	if err != nil {
 		return 0, err
 	}
-	return (*sizesPtr)[0], nil
+	n := (*sizesPtr)[0]
+	s.readCalls.Add(1)
+	s.readNanos.Add(uint64(time.Since(started)))
+	s.packets.Add(1)
+	s.bytes.Add(uint64(n))
+	s.lastPacket.Store(time.Now().UTC().UnixNano())
+	return n, nil
 }
 
 func (s *Stack) WritePacket(pkt []byte) error {
+	started := time.Now()
 	_, err := s.dev.Write([][]byte{pkt}, 0)
-	return err
+	if err != nil {
+		return err
+	}
+	s.writeCalls.Add(1)
+	s.writeNanos.Add(uint64(time.Since(started)))
+	s.packets.Add(1)
+	s.bytes.Add(uint64(len(pkt)))
+	s.lastPacket.Store(time.Now().UTC().UnixNano())
+	return nil
 }
 
 func (s *Stack) Close() error { return s.dev.Close() }
@@ -89,4 +126,19 @@ func (s *Stack) ResolveIP(_ context.Context, host string) ([]net.IP, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *Stack) Stats() Stats {
+	stats := Stats{
+		Packets:    s.packets.Load(),
+		Bytes:      s.bytes.Load(),
+		ReadCalls:  s.readCalls.Load(),
+		ReadNanos:  s.readNanos.Load(),
+		WriteCalls: s.writeCalls.Load(),
+		WriteNanos: s.writeNanos.Load(),
+	}
+	if ts := s.lastPacket.Load(); ts > 0 {
+		stats.LastPacketAt = time.Unix(0, ts).UTC()
+	}
+	return stats
 }

@@ -9,7 +9,7 @@ import (
 const (
 	CurrentAccountSchemaVersion  = 2
 	CurrentSettingsSchemaVersion = 2
-	CurrentRuntimeSchemaVersion  = 2
+	CurrentRuntimeSchemaVersion  = 3
 
 	RuntimeFamilyLegacy = "legacy"
 	RuntimeFamilyNative = "native"
@@ -368,55 +368,95 @@ const (
 	RuntimePhaseStopped    = "stopped"
 )
 
+// PacketPathStats captures lightweight userspace packet-path counters and call timings.
+type PacketPathStats struct {
+	Packets      uint64    `json:"packets,omitempty"`
+	Bytes        uint64    `json:"bytes,omitempty"`
+	ReadCalls    uint64    `json:"read_calls,omitempty"`
+	ReadNanos    uint64    `json:"read_nanos,omitempty"`
+	WriteCalls   uint64    `json:"write_calls,omitempty"`
+	WriteNanos   uint64    `json:"write_nanos,omitempty"`
+	LastPacketAt time.Time `json:"last_packet_at,omitempty"`
+}
+
+// TransportStatsSnapshot captures the current packet tunnel counters.
+type TransportStatsSnapshot struct {
+	PacketsRead    uint64    `json:"packets_read,omitempty"`
+	PacketsWritten uint64    `json:"packets_written,omitempty"`
+	BytesRead      uint64    `json:"bytes_read,omitempty"`
+	BytesWritten   uint64    `json:"bytes_written,omitempty"`
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
+}
+
+// RuntimeEventSnapshot stores the most recent transport event observed by the native runtime.
+type RuntimeEventSnapshot struct {
+	At      time.Time `json:"at,omitempty"`
+	Level   string    `json:"level,omitempty"`
+	Type    string    `json:"type,omitempty"`
+	Message string    `json:"message,omitempty"`
+}
+
+// RuntimeDiagnostics captures low-overhead dataplane diagnostics for status and bench inspection.
+type RuntimeDiagnostics struct {
+	CapturedAt    time.Time              `json:"captured_at,omitempty"`
+	LastEvent     *RuntimeEventSnapshot  `json:"last_event,omitempty"`
+	Transport     TransportStatsSnapshot `json:"transport,omitempty"`
+	StackToTunnel PacketPathStats        `json:"stack_to_tunnel,omitempty"`
+	TunnelToStack PacketPathStats        `json:"tunnel_to_stack,omitempty"`
+	Netstack      PacketPathStats        `json:"netstack,omitempty"`
+}
+
 // RuntimeState holds ephemeral process metadata persisted to runtime.json.
 type RuntimeState struct {
-	SchemaVersion       int       `json:"-"`
-	PID                 int       `json:"-"`
-	Backend             string    `json:"-"`
-	RuntimeFamily       string    `json:"-"`
-	Transport           string    `json:"-"`
-	Mode                string    `json:"-"`
-	Phase               string    `json:"-"`
-	ListenHost          string    `json:"-"`
-	ListenPort          int       `json:"-"`
-	SelectedEndpoint    string    `json:"-"`
-	SelectedAddressFam  string    `json:"-"`
-	ServiceSocketPath   string    `json:"-"`
-	ConfigPath          string    `json:"-"`
-	StdoutLogPath       string    `json:"-"`
-	StderrLogPath       string    `json:"-"`
-	StartedAt           time.Time `json:"-"`
-	LastReconnectAt     time.Time `json:"-"`
-	LastReconnectReason string    `json:"-"`
-	LastTransportError  string    `json:"-"`
-	LastError           string    `json:"-"`
-	LocalReachable      bool      `json:"-"`
-	LastTraceSummary    string    `json:"-"`
+	SchemaVersion       int                 `json:"-"`
+	PID                 int                 `json:"-"`
+	Backend             string              `json:"-"`
+	RuntimeFamily       string              `json:"-"`
+	Transport           string              `json:"-"`
+	Mode                string              `json:"-"`
+	Phase               string              `json:"-"`
+	ListenHost          string              `json:"-"`
+	ListenPort          int                 `json:"-"`
+	SelectedEndpoint    string              `json:"-"`
+	SelectedAddressFam  string              `json:"-"`
+	ServiceSocketPath   string              `json:"-"`
+	ConfigPath          string              `json:"-"`
+	StdoutLogPath       string              `json:"-"`
+	StderrLogPath       string              `json:"-"`
+	StartedAt           time.Time           `json:"-"`
+	LastReconnectAt     time.Time           `json:"-"`
+	LastReconnectReason string              `json:"-"`
+	LastTransportError  string              `json:"-"`
+	LastError           string              `json:"-"`
+	LocalReachable      bool                `json:"-"`
+	LastTraceSummary    string              `json:"-"`
+	Diagnostics         *RuntimeDiagnostics `json:"-"`
 }
 
 type runtimeStateJSON struct {
-	SchemaVersion       int       `json:"schema_version,omitempty"`
-	PID                 int       `json:"pid,omitempty"`
-	Backend             string    `json:"backend,omitempty"`
-	RuntimeFamily       string    `json:"runtime_family,omitempty"`
-	Transport           string    `json:"transport,omitempty"`
-	Mode                string    `json:"mode,omitempty"`
-	Phase               string    `json:"phase,omitempty"`
-	ListenHost          string    `json:"listen_host,omitempty"`
-	ListenPort          int       `json:"listen_port,omitempty"`
-	SelectedEndpoint    string    `json:"selected_endpoint,omitempty"`
-	SelectedAddressFam  string    `json:"selected_address_family,omitempty"`
-	ServiceSocketPath   string    `json:"service_socket_path,omitempty"`
-	ConfigPath          string    `json:"config_path,omitempty"`
-	StdoutLogPath       string    `json:"stdout_log_path,omitempty"`
-	StderrLogPath       string    `json:"stderr_log_path,omitempty"`
-	StartedAt           time.Time `json:"started_at,omitempty"`
-	LastReconnectAt     time.Time `json:"last_reconnect_at,omitempty"`
-	LastReconnectReason string    `json:"last_reconnect_reason,omitempty"`
-	LastTransportError  string    `json:"last_transport_error,omitempty"`
-	LastError           string    `json:"last_error,omitempty"`
-	LocalReachable      bool      `json:"local_reachable,omitempty"`
-	LastTraceSummary    string    `json:"last_trace_summary,omitempty"`
+	SchemaVersion       int                 `json:"schema_version,omitempty"`
+	PID                 int                 `json:"pid,omitempty"`
+	Backend             string              `json:"backend,omitempty"`
+	RuntimeFamily       string              `json:"runtime_family,omitempty"`
+	Transport           string              `json:"transport,omitempty"`
+	Mode                string              `json:"mode,omitempty"`
+	Phase               string              `json:"phase,omitempty"`
+	ListenHost          string              `json:"listen_host,omitempty"`
+	ListenPort          int                 `json:"listen_port,omitempty"`
+	SelectedEndpoint    string              `json:"selected_endpoint,omitempty"`
+	SelectedAddressFam  string              `json:"selected_address_family,omitempty"`
+	ServiceSocketPath   string              `json:"service_socket_path,omitempty"`
+	ConfigPath          string              `json:"config_path,omitempty"`
+	StdoutLogPath       string              `json:"stdout_log_path,omitempty"`
+	StderrLogPath       string              `json:"stderr_log_path,omitempty"`
+	StartedAt           time.Time           `json:"started_at,omitempty"`
+	LastReconnectAt     time.Time           `json:"last_reconnect_at,omitempty"`
+	LastReconnectReason string              `json:"last_reconnect_reason,omitempty"`
+	LastTransportError  string              `json:"last_transport_error,omitempty"`
+	LastError           string              `json:"last_error,omitempty"`
+	LocalReachable      bool                `json:"local_reachable,omitempty"`
+	LastTraceSummary    string              `json:"last_trace_summary,omitempty"`
+	Diagnostics         *RuntimeDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // Normalize upgrades older runtime state into the richer runtime model.
@@ -479,6 +519,7 @@ func (r RuntimeState) MarshalJSON() ([]byte, error) {
 		LastError:           rr.LastError,
 		LocalReachable:      rr.LocalReachable,
 		LastTraceSummary:    rr.LastTraceSummary,
+		Diagnostics:         rr.Diagnostics,
 	})
 }
 
@@ -510,6 +551,7 @@ func (r *RuntimeState) UnmarshalJSON(data []byte) error {
 		LastError:           raw.LastError,
 		LocalReachable:      raw.LocalReachable,
 		LastTraceSummary:    raw.LastTraceSummary,
+		Diagnostics:         raw.Diagnostics,
 	}
 	r.Normalize()
 	return nil

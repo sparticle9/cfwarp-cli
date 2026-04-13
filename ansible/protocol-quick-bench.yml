@@ -32,6 +32,13 @@
     startup_wait_seconds: 15
     retry_sleep_seconds: 3
     probe_timeout_seconds: 20
+    udp_buffer_bytes: 0
+    masque_use_ipv6: ""
+    masque_connect_port: 0
+    masque_mtu: 0
+    masque_initial_packet_size: 0
+    masque_keepalive_period_seconds: 0
+    masque_reconnect_delay_millis: 0
     protocol_cases:
       - protocol: wireguard
         container_name: cfwarp-bench-wireguard
@@ -67,6 +74,32 @@
         path: "{{ bench_root }}/{{ bench_id_resolved }}"
         state: directory
         mode: "0755"
+
+    - name: Capture current UDP socket buffer sysctls
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf 'rmem_max=%s\n' "$(cat /proc/sys/net/core/rmem_max)"
+        printf 'wmem_max=%s\n' "$(cat /proc/sys/net/core/wmem_max)"
+      args:
+        executable: /bin/bash
+      register: udp_buffer_sysctl_before
+      changed_when: false
+      when: udp_buffer_bytes | int > 0
+
+    - name: Parse captured UDP socket buffer sysctls
+      ansible.builtin.set_fact:
+        udp_rmem_max_before: "{{ udp_buffer_sysctl_before.stdout | regex_search('rmem_max=(\\d+)', '\\1') | first }}"
+        udp_wmem_max_before: "{{ udp_buffer_sysctl_before.stdout | regex_search('wmem_max=(\\d+)', '\\1') | first }}"
+      when: udp_buffer_bytes | int > 0
+
+    - name: Apply larger UDP socket buffer sysctls
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo sysctl -w net.core.rmem_max={{ udp_buffer_bytes | int }} net.core.wmem_max={{ udp_buffer_bytes | int }} >/dev/null
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: udp_buffer_bytes | int > 0
 
     - name: Pull packaged image under test
       ansible.builtin.command:
@@ -133,7 +166,13 @@
             -p "127.0.0.1:${host_port}:${container_port}" \
             -v "$state_dir:/home/cfwarp/.local/state/cfwarp-cli" \
             {% for key, value in item.env.items() %}-e {{ key }}={{ value | quote }} \
-            {% endfor %}
+            {% endfor %}{% if item.protocol == 'masque' and masque_use_ipv6 | string | length > 0 %}-e CFWARP_MASQUE_USE_IPV6={{ masque_use_ipv6 | quote }} \
+            {% endif %}{% if item.protocol == 'masque' and masque_connect_port | int > 0 %}-e CFWARP_MASQUE_CONNECT_PORT={{ (masque_connect_port | int) | string | quote }} \
+            {% endif %}{% if item.protocol == 'masque' and masque_mtu | int > 0 %}-e CFWARP_MASQUE_MTU={{ (masque_mtu | int) | string | quote }} \
+            {% endif %}{% if item.protocol == 'masque' and masque_initial_packet_size | int > 0 %}-e CFWARP_MASQUE_INITIAL_PACKET_SIZE={{ (masque_initial_packet_size | int) | string | quote }} \
+            {% endif %}{% if item.protocol == 'masque' and masque_keepalive_period_seconds | int > 0 %}-e CFWARP_MASQUE_KEEPALIVE_SECONDS={{ (masque_keepalive_period_seconds | int) | string | quote }} \
+            {% endif %}{% if item.protocol == 'masque' and masque_reconnect_delay_millis | int > 0 %}-e CFWARP_MASQUE_RECONNECT_DELAY_MILLIS={{ (masque_reconnect_delay_millis | int) | string | quote }} \
+            {% endif %}
             {{ cfwarp_image | quote }})
           echo "container=${cid}"
           sleep "$startup_wait"
@@ -185,11 +224,23 @@
           i=$((i + 1))
         done
 
-        python3 - "$tmp_latency" "$tmp_download" {{ item.protocol | quote }} > "$result_json" <<'PY'
+        stderr_log="$state_dir/logs/backend.stderr.log"
+        runtime_json="$state_dir/run/runtime.json"
+        if [ ! -f "$stderr_log" ]; then
+          : > "$stderr_log"
+        fi
+        if [ ! -f "$runtime_json" ]; then
+          : > "$runtime_json"
+        fi
+
+        python3 - "$tmp_latency" "$tmp_download" "$stderr_log" "$runtime_json" {{ item.protocol | quote }} "$attempt" > "$result_json" <<'PY'
         import json, pathlib, statistics, sys
         latency_path = pathlib.Path(sys.argv[1])
         download_path = pathlib.Path(sys.argv[2])
-        protocol = sys.argv[3]
+        stderr_path = pathlib.Path(sys.argv[3])
+        runtime_path = pathlib.Path(sys.argv[4])
+        protocol = sys.argv[5]
+        startup_attempt_used = int(sys.argv[6])
         lat = [float(x.strip()) for x in latency_path.read_text().splitlines() if x.strip()]
         dls = []
         for line in download_path.read_text().splitlines():
@@ -199,8 +250,17 @@
             dls.append((float(t), float(s)))
         lat_sorted = sorted(lat)
         idx95 = max(0, min(len(lat_sorted)-1, int(round(0.95 * len(lat_sorted))) - 1))
+        stderr_lines = stderr_path.read_text().splitlines() if stderr_path.exists() else []
+        endpoint_lines = [line for line in stderr_lines if 'type=endpoint_selected' in line]
+        dial_metric_lines = [line for line in stderr_lines if 'type=dial_metrics' in line]
+        retry_lines = [line for line in stderr_lines if 'type=retry' in line]
+        runtime = {}
+        if runtime_path.exists() and runtime_path.read_text().strip():
+            runtime = json.loads(runtime_path.read_text())
+        diagnostics = runtime.get('diagnostics') or {}
         out = {
             'protocol': protocol,
+            'startup_attempt_used': startup_attempt_used,
             'latency_runs_s': lat,
             'latency_ms': {
                 'min': round(min(lat) * 1000, 1),
@@ -221,6 +281,18 @@
                 'mean_MiBps': round(statistics.mean([s / 1024 / 1024 for _, s in dls]), 2),
                 'min_MiBps': round(min([s / 1024 / 1024 for _, s in dls]), 2),
                 'max_MiBps': round(max([s / 1024 / 1024 for _, s in dls]), 2),
+            },
+            'transport_debug': {
+                'endpoint_selected': endpoint_lines[-1] if endpoint_lines else '',
+                'dial_metrics': dial_metric_lines[-1] if dial_metric_lines else '',
+                'retry_count': len(retry_lines),
+            },
+            'runtime_debug': {
+                'phase': runtime.get('phase', ''),
+                'selected_endpoint': runtime.get('selected_endpoint', ''),
+                'selected_address_family': runtime.get('selected_address_family', ''),
+                'last_transport_error': runtime.get('last_transport_error', ''),
+                'diagnostics': diagnostics,
             },
         }
         print(json.dumps(out, indent=2))
@@ -252,6 +324,15 @@
         comparison = {
             'bench_id': {{ bench_id_resolved | to_json }},
             'image': {{ cfwarp_image | to_json }},
+            'udp_buffer_bytes': {{ udp_buffer_bytes | int }},
+            'masque_tuning': {
+                'use_ipv6': {{ masque_use_ipv6 | to_json }},
+                'connect_port': {{ masque_connect_port | int }},
+                'mtu': {{ masque_mtu | int }},
+                'initial_packet_size': {{ masque_initial_packet_size | int }},
+                'keepalive_period_seconds': {{ masque_keepalive_period_seconds | int }},
+                'reconnect_delay_millis': {{ masque_reconnect_delay_millis | int }},
+            },
             'protocols': {
                 'wireguard': wireguard,
                 'masque': masque,
@@ -285,8 +366,10 @@
         (base / 'comparison.json').write_text(json.dumps(comparison, indent=2) + '\n')
         lines = [
             f"bench_id={comparison['bench_id']}",
+            f"udp_buffer_bytes={comparison['udp_buffer_bytes']}",
+            f"masque_tuning={comparison['masque_tuning']}",
             f"wireguard: median={wireguard['latency_ms']['median']} ms, p95={wireguard['latency_ms']['p95']} ms, mean_dl={wireguard['download_summary']['mean_MiBps']} MiB/s",
-            f"masque: median={masque['latency_ms']['median']} ms, p95={masque['latency_ms']['p95']} ms, mean_dl={masque['download_summary']['mean_MiBps']} MiB/s",
+            f"masque: median={masque['latency_ms']['median']} ms, p95={masque['latency_ms']['p95']} ms, mean_dl={masque['download_summary']['mean_MiBps']} MiB/s, startup_attempt={masque.get('startup_attempt_used')}, retries={masque.get('transport_debug', {}).get('retry_count')}, endpoint={masque.get('runtime_debug', {}).get('selected_endpoint')}, family={masque.get('runtime_debug', {}).get('selected_address_family')}",
             f"median latency delta (masque - wireguard): {comparison['comparison']['latency_median_ms_delta']} ms ({comparison['comparison']['latency_median_pct_vs_wireguard']}%)",
             f"p95 latency delta (masque - wireguard): {comparison['comparison']['latency_p95_ms_delta']} ms ({comparison['comparison']['latency_p95_pct_vs_wireguard']}%)",
             f"mean download delta (masque - wireguard): {comparison['comparison']['download_mean_MiBps_delta']} MiB/s ({comparison['comparison']['download_mean_pct_vs_wireguard']}%)",
@@ -302,3 +385,12 @@
     - name: Show quick protocol bench summary
       ansible.builtin.debug:
         msg: "{{ protocol_bench_summary.stdout_lines }}"
+
+    - name: Restore UDP socket buffer sysctls
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo sysctl -w net.core.rmem_max={{ udp_rmem_max_before }} net.core.wmem_max={{ udp_wmem_max_before }} >/dev/null
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: udp_buffer_bytes | int > 0
