@@ -56,11 +56,6 @@
     singbox_rule_set_url: https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google-deepmind.srs
     singbox_rule_target_outbound: cfwarp-masque-local
 
-    dogfood_observer_log_dir: /var/log/cfwarp-dogfood
-    dogfood_observer_script_path: /usr/local/bin/cfwarp-dogfood-observer
-    dogfood_observer_interval: 2min
-    dogfood_probe_timeout_seconds: 20
-
     proxy_checks:
       - name: wireguard
         container_name: cfwarp-warp
@@ -86,12 +81,6 @@
         state: restarted
         enabled: true
 
-    - name: restart observer timer
-      ansible.builtin.systemd_service:
-        name: cfwarp-dogfood-observer.timer
-        state: restarted
-        enabled: true
-
   tasks:
     - name: Ensure compose directory exists
       ansible.builtin.file:
@@ -99,16 +88,13 @@
         state: directory
         mode: "0750"
 
-    - name: Ensure managed helper directories exist
+    - name: Ensure managed helper directory exists
       ansible.builtin.file:
-        path: "{{ item.path }}"
+        path: "{{ singbox_managed_dir }}"
         state: directory
         owner: root
         group: root
-        mode: "{{ item.mode }}"
-      loop:
-        - { path: "{{ singbox_managed_dir }}", mode: "0755" }
-        - { path: "{{ dogfood_observer_log_dir }}", mode: "0755" }
+        mode: "0755"
 
     - name: Copy dogfood compose file
       ansible.builtin.copy:
@@ -233,12 +219,14 @@
         label: "{{ item.name }}"
       register: proxy_status_json
       changed_when: false
+      failed_when: false
 
     - name: Show runtime status JSON
       ansible.builtin.debug:
         msg: |
           {{ item.item.name }} =>
-          {{ item.stdout }}
+          {{ item.stdout | default('') }}
+          {{ item.stderr | default('') }}
       loop: "{{ proxy_status_json.results }}"
       loop_control:
         label: "{{ item.item.name }}"
@@ -355,37 +343,45 @@
       notify: restart sing-box
       when: singbox_manage_router | bool
 
-    - name: Install observer probe script
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/templates/cfwarp-dogfood-observer.sh.j2"
-        dest: "{{ dogfood_observer_script_path }}"
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Install observer systemd service
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/templates/cfwarp-dogfood-observer.service.j2"
-        dest: /etc/systemd/system/cfwarp-dogfood-observer.service
-        owner: root
-        group: root
-        mode: "0644"
-      notify:
-        - reload systemd
-        - restart observer timer
-
-    - name: Install observer systemd timer
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/templates/cfwarp-dogfood-observer.timer.j2"
-        dest: /etc/systemd/system/cfwarp-dogfood-observer.timer
-        owner: root
-        group: root
-        mode: "0644"
-      notify:
-        - reload systemd
-        - restart observer timer
-
     - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Stop and disable legacy observer timer if present
+      ansible.builtin.systemd_service:
+        name: cfwarp-dogfood-observer.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Stop legacy observer service if present
+      ansible.builtin.systemd_service:
+        name: cfwarp-dogfood-observer.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove legacy observer script
+      ansible.builtin.file:
+        path: /usr/local/bin/cfwarp-dogfood-observer
+        state: absent
+
+    - name: Remove legacy observer service unit
+      ansible.builtin.file:
+        path: /etc/systemd/system/cfwarp-dogfood-observer.service
+        state: absent
+      notify: reload systemd
+
+    - name: Remove legacy observer timer unit
+      ansible.builtin.file:
+        path: /etc/systemd/system/cfwarp-dogfood-observer.timer
+        state: absent
+      notify: reload systemd
+
+    - name: Remove legacy observer log directory
+      ansible.builtin.file:
+        path: /var/log/cfwarp-dogfood
+        state: absent
+
+    - name: Flush handlers after observer cleanup
       ansible.builtin.meta: flush_handlers
 
     - name: Ensure sing-box service is enabled and running
@@ -393,18 +389,6 @@
         name: "{{ singbox_service_name }}"
         state: started
         enabled: true
-
-    - name: Ensure observer timer is enabled and running
-      ansible.builtin.systemd_service:
-        name: cfwarp-dogfood-observer.timer
-        state: started
-        enabled: true
-
-    - name: Run observer once immediately
-      ansible.builtin.command:
-        argv:
-          - "{{ dogfood_observer_script_path }}"
-      changed_when: false
 
     - name: Show sing-box service status
       ansible.builtin.command:

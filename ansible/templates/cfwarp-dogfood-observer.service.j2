@@ -1,9 +1,0 @@
-[Unit]
-Description=cfwarp dogfood observer probe
-After=docker.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart={{ dogfood_observer_script_path }}
-User=root

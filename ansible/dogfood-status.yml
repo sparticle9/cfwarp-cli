@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit <host>
-#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit <host> \
+#   ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
 #     -e dogfood_verify_trace=true
 
 - name: Inspect cfwarp dogfood stack
@@ -16,11 +16,11 @@
     compose_dir: /opt/cfwarp-dogfood
     compose_file: docker-compose.yml
     dogfood_verify_trace: false
+    dogfood_backend_log_tail_lines: 40
     singbox_service_name: sing-box
     singbox_config_dir: /etc/sing-box
     singbox_outbounds_path: /etc/sing-box/outbounds.json
     singbox_routes_path: /etc/sing-box/routes.json
-    dogfood_observer_log_dir: /var/log/cfwarp-dogfood
     cfwarp_wireguard_port: 16080
     cfwarp_masque_port: 16081
     cfwarp_wireguard_state_dir: /home/cfwarp/.local/state/cfwarp-cli
@@ -95,28 +95,71 @@
         msg: "{{ docker_stats.stdout_lines | default([]) }}"
 
     - name: Capture cfwarp-cli status JSON inside each container
-      ansible.builtin.command:
-        argv:
-          - docker
-          - exec
-          - "{{ item.container_name }}"
-          - cfwarp-cli
-          - status
-          - --json
-          - --state-dir
-          - "{{ item.state_dir }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        timeout 10s docker exec {{ item.container_name | quote }} cfwarp-cli status --json --state-dir {{ item.state_dir | quote }}
+      args:
+        executable: /bin/bash
       loop: "{{ proxy_checks }}"
       loop_control:
         label: "{{ item.name }}"
       register: runtime_status
       changed_when: false
+      failed_when: false
 
     - name: Print runtime status JSON
       ansible.builtin.debug:
         msg: |
           {{ item.item.name }} =>
-          {{ item.stdout }}
+          {{ item.stdout | default('') }}
+          {{ item.stderr | default('') }}
       loop: "{{ runtime_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Show backend runtime state files when present
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker exec {{ item.container_name | quote }} sh -lc 'state_dir={{ item.state_dir | quote }}; if [ -f "$state_dir/run/runtime.json" ]; then cat "$state_dir/run/runtime.json"; else echo no-runtime-json; fi'
+      args:
+        executable: /bin/bash
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: runtime_files
+      changed_when: false
+      failed_when: false
+
+    - name: Print backend runtime state files
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} runtime.json =>
+          {{ item.stdout | default('') }}
+          {{ item.stderr | default('') }}
+      loop: "{{ runtime_files.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Tail backend stderr logs from state dir
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker exec {{ item.container_name | quote }} sh -lc 'state_dir={{ item.state_dir | quote }}; tail -n {{ dogfood_backend_log_tail_lines | int }} "$state_dir/logs/backend.stderr.log" 2>/dev/null || true'
+      args:
+        executable: /bin/bash
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: backend_stderr_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Print backend stderr logs
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} backend.stderr.log =>
+          {{ item.stdout | default('') }}
+          {{ item.stderr | default('') }}
+      loop: "{{ backend_stderr_logs.results }}"
       loop_control:
         label: "{{ item.item.name }}"
 
@@ -143,7 +186,7 @@
         label: "{{ item.item.name }}"
       when: dogfood_verify_trace | bool
 
-    - name: Tail recent logs for each proxy container
+    - name: Tail recent container logs for each proxy
       ansible.builtin.command:
         argv:
           - docker
@@ -158,7 +201,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Print recent logs
+    - name: Print recent container logs
       ansible.builtin.debug:
         msg: |
           {{ item.item.name }} =>
@@ -245,18 +288,3 @@
     - name: Print sing-box journal
       ansible.builtin.debug:
         msg: "{{ singbox_journal.stdout_lines | default([]) }}"
-
-    - name: Tail observer probe log
-      ansible.builtin.command:
-        argv:
-          - tail
-          - -n
-          - "40"
-          - "{{ dogfood_observer_log_dir }}/probe.log"
-      register: observer_log
-      changed_when: false
-      failed_when: false
-
-    - name: Print observer probe log tail
-      ansible.builtin.debug:
-        msg: "{{ observer_log.stdout_lines | default([]) }}"

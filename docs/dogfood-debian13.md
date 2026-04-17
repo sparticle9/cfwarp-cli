@@ -52,11 +52,12 @@ See also:
 - `ansible/dogfood-deploy.yml`
   - copies compose files to remote host
   - starts both proxies on localhost-only nonstandard ports `16080` and `16081`
-  - can inject two local SOCKS outbounds into sing-box config when a stable config file path is available
+  - can inject two local SOCKS outbounds into sing-box config when fragment files are available
   - adds `geosite-google-deepmind` rule-set routing to the managed cfwarp outbound
-  - installs a lightweight observer timer for periodic probe logging
+  - removes the old periodic observer timer/service if it exists
 - `ansible/dogfood-status.yml`
-  - shows compose state, `docker inspect`, `docker stats`, `cfwarp-cli status --json`, sing-box service/journal state, and observer probe logs
+  - on-demand inspection only
+  - shows compose state, `docker inspect`, `docker stats`, `cfwarp-cli status --json`, backend runtime files, backend stderr logs, sing-box service state, and sing-box journal output
 
 ## Option A — deploy with Ansible
 
@@ -136,7 +137,16 @@ docker exec cfwarp-masque cfwarp-cli status --json \
   --state-dir /home/nonroot/.local/state/cfwarp-cli
 ```
 
-### 3. Check actual egress through each localhost SOCKS listener
+### 3. Check backend runtime files directly when status output is misleading
+
+```bash
+docker exec cfwarp-masque sh -lc 'cat /home/cfwarp/.local/state/cfwarp-cli/run/runtime.json'
+docker exec cfwarp-masque sh -lc 'tail -n 40 /home/cfwarp/.local/state/cfwarp-cli/logs/backend.stderr.log'
+
+docker exec cfwarp-warp sh -lc 'tail -n 40 /home/cfwarp/.local/state/cfwarp-cli/logs/backend.stderr.log'
+```
+
+### 4. Check actual egress through each localhost SOCKS listener
 
 ```bash
 curl -fsSL --proxy socks5h://127.0.0.1:16080 https://www.cloudflare.com/cdn-cgi/trace
@@ -151,7 +161,7 @@ warp=on
 
 ## Route selected traffic through local sing-box
 
-When sing-box is using a stable single-file config path, the deploy playbook can manage it with `become` and inject:
+When sing-box is using fragment files under `/etc/sing-box`, the deploy playbook can manage them with `become` and inject:
 
 - outbound `cfwarp-warp-local` => `socks5://127.0.0.1:16080`
 - outbound `cfwarp-masque-local` => `socks5://127.0.0.1:16081`
@@ -204,26 +214,16 @@ Change the proxy port in the env file:
 
 The compose file already contains optional `trace-wireguard` and `trace-masque` services under the `canary` profile. Those are simple stand-ins for another local daemon that routes through the proxy using `ALL_PROXY`.
 
-## Monitoring loop
+## On-demand monitoring loop
 
-The deploy playbook installs:
+There is no longer a background observer service.
 
-- `/usr/local/bin/cfwarp-dogfood-observer`
-- `cfwarp-dogfood-observer.service`
-- `cfwarp-dogfood-observer.timer`
-- log file at `/var/log/cfwarp-dogfood/probe.log`
-
-It records periodic probe results for:
-
-- Cloudflare trace through WARP port
-- Cloudflare trace through MASQUE port
-- Google `generate_204` through WARP port
-- Google `generate_204` through MASQUE port
-- current `sing-box` service state
-
-Useful commands during dogfooding:
+Use these commands when you want status:
 
 ```bash
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
+  -e dogfood_verify_trace=true
+
 docker inspect --format '{{json .State}}' cfwarp-warp
 docker inspect --format '{{json .State}}' cfwarp-masque
 
@@ -235,7 +235,8 @@ docker logs --tail 100 cfwarp-masque
 systemctl status sing-box --no-pager
 journalctl -u sing-box -n 100 --no-pager
 
-tail -n 40 /var/log/cfwarp-dogfood/probe.log
+docker exec cfwarp-masque sh -lc 'cat /home/cfwarp/.local/state/cfwarp-cli/run/runtime.json'
+docker exec cfwarp-masque sh -lc 'tail -n 40 /home/cfwarp/.local/state/cfwarp-cli/logs/backend.stderr.log'
 
 docker exec cfwarp-warp cfwarp-cli status --json --require-account --require-running --require-reachable \
   --state-dir /home/cfwarp/.local/state/cfwarp-cli
