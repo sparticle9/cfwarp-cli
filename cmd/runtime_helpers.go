@@ -11,7 +11,6 @@ import (
 	"github.com/nexus/cfwarp-cli/internal/health"
 	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
-	"github.com/nexus/cfwarp-cli/internal/supervisor"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +47,7 @@ func startBackendRuntime(ctx context.Context, out io.Writer, dirs state.Dirs, se
 	}
 
 	if rt, err := state.LoadRuntime(dirs); err == nil {
-		if supervisor.CheckStale(rt) {
+		if orchestrator.IsRuntimeActive(rt) {
 			return state.RuntimeState{}, fmt.Errorf("backend already running (PID %d)", rt.PID)
 		}
 		if out != nil {
