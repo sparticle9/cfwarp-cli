@@ -57,4 +57,4 @@ EXPOSE 1080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
   CMD ["/usr/local/bin/cfwarp-cli", "status", "--state-dir", "/home/nonroot/.local/state/cfwarp-cli", "--require-account", "--require-running", "--require-reachable"]
 
-ENTRYPOINT ["/usr/local/bin/cfwarp-cli", "up", "--foreground"]
+ENTRYPOINT ["/usr/local/bin/cfwarp-cli", "daemon", "run"]

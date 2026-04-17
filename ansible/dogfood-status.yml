@@ -210,6 +210,35 @@
       loop_control:
         label: "{{ item.item.name }}"
 
+    - name: Query daemon status from each proxy container when available
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "{{ item.container_name }}"
+          - cfwarp-cli
+          - daemon
+          - ctl
+          - status
+          - --state-dir
+          - "{{ item.state_dir }}"
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: daemon_status
+      changed_when: false
+      failed_when: false
+
+    - name: Print daemon status
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} daemon =>
+          {{ item.stdout | default('') }}
+          {{ item.stderr | default('') }}
+      loop: "{{ daemon_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
     - name: Show sing-box service state
       ansible.builtin.command:
         argv:

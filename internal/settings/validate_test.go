@@ -77,7 +77,7 @@ func TestValidate_InvalidLogLevel(t *testing.T) {
 
 func TestValidate_PortZero(t *testing.T) {
 	s := validSettings()
-	s.ListenPort = 0
+	s.Access = []state.AccessConfig{{Type: state.ModeSocks5, ListenHost: "127.0.0.1", ListenPort: 0}}
 	err := settings.Validate(s)
 	if err == nil || !strings.Contains(err.Error(), "listen_port") {
 		t.Errorf("expected listen_port error, got: %v", err)

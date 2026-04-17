@@ -1,126 +1,250 @@
-# WARP address rotation and unlock checks
+# WARP address rotation, caps, and daemon control
 
-This document covers the minimal address-rotation and unlock-checking workflow built into `cfwarp-cli`.
+This document covers the current minimal implementation for:
 
-## Goals
+- inspecting assigned WARP addresses
+- validating built-in capability probes
+- rotating registrations manually
+- running a long-lived daemon that uses configured capability checks to decide when to rotate
 
-The implementation intentionally stays small:
+## Model
 
-- use the existing Cloudflare registration flow to obtain a new WARP address set
-- expose the assigned IPv4 / IPv6 addresses directly from local state
-- validate a candidate address through the already configured local proxy
-- drive retries from a small set of service checks instead of a giant shell script
+The model is intentionally small and explicit:
 
-## What is implemented
+- **transport** = upstream tunnel protocol (`wireguard` or `masque`)
+- **access** = how local clients consume the tunnel (`socks5` or `http` today)
+- **caps** = built-in capability probes the service should satisfy
+- **rotation** = remediation used when a cap fails
+- **daemon** = long-lived manager that owns checks, rotation, and live control
 
-### 1. Show allocated addresses
+## Current support matrix
+
+Access types currently implemented:
+
+- `socks5`
+- `http` (including HTTPS via CONNECT)
+
+Reserved for later:
+
+- `tun`
+
+Current backend/access support:
+
+| backend | socks5 | http | tun |
+|---|---:|---:|---:|
+| `singbox-wireguard` | yes | yes | no |
+| `native-masque` | yes | yes | no |
+
+## Commands
+
+### Show assigned addresses
 
 ```bash
 cfwarp-cli address show
 cfwarp-cli address show --json
 ```
 
-This reads the current account state and prints the assigned addresses:
+Shows the currently allocated address material from local account state:
 
 - WireGuard IPv4 / IPv6
 - WireGuard peer endpoint
 - MASQUE IPv4 / IPv6 when MASQUE state exists
 
-This is the address material that a local proxy backend already uses, and it is also the address material a future TUN-oriented backend would consume.
+### Validate config integrity
 
-### 2. Lightweight unlock checks
+```bash
+cfwarp-cli validate
+cfwarp-cli validate --json
+```
+
+This validates the resolved config after applying defaults, persisted settings, env vars, and CLI overrides.
+
+### Manual unlock checks
 
 ```bash
 cfwarp-cli unlock test --service gemini --service chatgpt
-cfwarp-cli unlock test --service claude --json
+cfwarp-cli unlock test --json
 ```
 
-Current checks:
+Current manual unlock checks:
 
 - `gemini`
 - `chatgpt` (alias: `openai`)
-- `claude`
 
-These checks are intentionally narrow and proxy-oriented:
-
-- no huge shell dependency tree
-- no giant all-services media sweep
-- only a few HTTP requests through the configured local proxy
-
-Current heuristics are adapted from the same broad ideas used by common shell scripts:
-
-- **Gemini**: look for the known availability marker on `https://gemini.google.com`
-- **ChatGPT / OpenAI**: combine the `cookie_requirements` endpoint with `ios.chat.openai.com`
-- **Claude**: inspect the final redirected URL from `https://claude.ai/`
-
-## 3. Rotate until checks pass
+### Manual rotation
 
 ```bash
-cfwarp-cli rotate --attempts 10 --service gemini --service chatgpt
+cfwarp-cli rotate --attempts 8 --service gemini --service chatgpt
 ```
+
+This is still available as an explicit operator tool.
+
+### Run the daemon
+
+```bash
+cfwarp-cli daemon run
+```
+
+The daemon:
+
+1. ensures the backend is running
+2. evaluates configured cap probes on a schedule
+3. rotates registration/account state when configured remediation rules say so
+4. can be controlled live over a local Unix socket
+
+### Control a running daemon
+
+```bash
+cfwarp-cli daemon ctl status
+cfwarp-cli daemon ctl check
+cfwarp-cli daemon ctl rotate
+cfwarp-cli daemon ctl reload
+```
+
+Important behavior:
+
+- `daemon ctl rotate` forces a rotation cycle **without restarting the daemon process**
+- `daemon ctl reload` reloads settings and restarts the managed backend internally if needed
+
+## Config shape
+
+The config is carried by `settings.json` and the existing flag/env resolution layer.
+
+Current schema additions are:
+
+```json
+{
+  "runtime_family": "legacy",
+  "transport": "wireguard",
+  "log_level": "info",
+  "access": [
+    {
+      "type": "socks5",
+      "listen_host": "0.0.0.0",
+      "listen_port": 1080
+    },
+    {
+      "type": "http",
+      "listen_host": "0.0.0.0",
+      "listen_port": 8080
+    }
+  ],
+  "daemon": {
+    "control_socket": "/run/cfwarp-cli/daemon.sock"
+  },
+  "caps": {
+    "interval_seconds": 300,
+    "checks": [
+      {
+        "probe": "internet",
+        "required": true,
+        "rotate_on_fail": true,
+        "timeout_seconds": 10
+      },
+      {
+        "probe": "gemini",
+        "required": false,
+        "rotate_on_fail": true,
+        "timeout_seconds": 15
+      },
+      {
+        "probe": "chatgpt",
+        "required": false,
+        "rotate_on_fail": true,
+        "timeout_seconds": 15
+      }
+    ]
+  },
+  "rotation": {
+    "enabled": true,
+    "max_attempts_per_incident": 3,
+    "settle_time_seconds": 12,
+    "cooldown_seconds": 1800,
+    "restore_last_good": true,
+    "enroll_masque": false
+  }
+}
+```
+
+## Built-in cap probes
+
+Current built-in probe names:
+
+- `internet`
+- `warp`
+- `gemini`
+- `chatgpt`
+
+These are **code-defined** probes, not arbitrary shell commands.
+
+That keeps the system predictable and efficient while leaving room for later built-ins such as YouTube-specific capability checks.
+
+## Required vs optional caps
+
+Each cap check has:
+
+- `required`
+- `rotate_on_fail`
 
 Behavior:
 
-1. stop the current backend if it is running
-2. re-register the WARP account to obtain a new address set
-3. bring the configured backend up again
-4. run the requested unlock checks through the local proxy
-5. stop and retry if checks fail
-6. keep the new account when checks pass
+- if `rotate_on_fail=true`, the daemon may try rotation to satisfy that cap
+- if `required=true` and rotation budget is exhausted, the daemon exits non-zero
+- if `required=false` and rotation budget is exhausted, the daemon keeps running and remains degraded
 
-If all attempts fail and a previous account existed, the command restores the previous account state and restarts the backend.
+## Notes on current implementation
 
-## Important scope note
-
-This phase does **not** add a production TUN backend yet.
-
-What it does give you is:
-
-- direct visibility into the allocated IPv6 address
-- deterministic address rotation
-- proxy-driven unlock validation suitable for server-side dogfooding
-
-That keeps the integration minimal while still covering the practical operator workflow.
+- `access` is now the service-side exposure model
+- the old single `mode` / `listen_host` / `listen_port` fields are still accepted for compatibility
+- internally, the system derives those legacy fields from the first access entry when needed
+- `http` access already supports HTTPS via CONNECT
+- `tun` is not yet implemented and is rejected by config validation today
 
 ## Suggested operator workflow
 
-### Inspect current assigned addresses
+### Inspect addresses
 
 ```bash
 cfwarp-cli registration show
 cfwarp-cli address show
 ```
 
-### Validate current proxy unlocks
+### Validate config
+
+```bash
+cfwarp-cli validate --json
+```
+
+### Check current capabilities manually
 
 ```bash
 cfwarp-cli unlock test --service gemini --service chatgpt
 ```
 
-### Rotate until a target set passes
+### Run long-lived management
 
 ```bash
-cfwarp-cli rotate --attempts 8 --service gemini --service chatgpt
+cfwarp-cli daemon run
 ```
 
-### Keep MASQUE state while rotating
+### Force a live rotation later
 
 ```bash
-cfwarp-cli rotate --attempts 8 --service gemini --service chatgpt --masque
+cfwarp-cli daemon ctl rotate
 ```
 
-## Design notes
+## Design goal
 
-Compared with the large popular shell scripts, this integration deliberately avoids:
+Compared with the large popular shell scripts, this implementation deliberately avoids:
 
-- dozens of unrelated streaming checks
-- OS/package-manager orchestration
-- giant mutable bash state machines
-- hidden background retry loops
+- giant mutable bash control flow
+- dozens of unrelated media checks
+- package-manager orchestration mixed with runtime policy
+- hidden always-on retry loops outside the managed daemon
 
-The goal here is:
+The goal is:
 
-- a small CLI surface
-- predictable JSON/state files
-- easy Docker / Ansible integration
-- enough unlock logic to drive address rotation for the important targets
+- small CLI surface
+- explicit JSON settings
+- predictable daemon behavior
+- live operator control without restarting the service

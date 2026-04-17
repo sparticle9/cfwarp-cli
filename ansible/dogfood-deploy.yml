@@ -28,6 +28,8 @@
     cfwarp_masque_port: 16081
     cfwarp_wireguard_state_dir: /home/cfwarp/.local/state/cfwarp-cli
     cfwarp_masque_state_dir: /home/cfwarp/.local/state/cfwarp-cli
+    cfwarp_wireguard_data_dir: "{{ compose_dir }}/state/wireguard"
+    cfwarp_masque_data_dir: "{{ compose_dir }}/state/masque"
     cfwarp_log_level: info
     trace_interval_seconds: 60
     dogfood_enable_canary: false
@@ -39,6 +41,20 @@
     cfwarp_masque_initial_packet_size: 1242
     cfwarp_masque_keepalive_seconds: 25
     cfwarp_masque_reconnect_delay_millis: 1200
+    cfwarp_wireguard_caps_checks: []
+    cfwarp_wireguard_caps_interval_seconds: 300
+    cfwarp_wireguard_rotation_enabled: false
+    cfwarp_wireguard_rotation_max_attempts_per_incident: 3
+    cfwarp_wireguard_rotation_settle_time_seconds: 12
+    cfwarp_wireguard_rotation_cooldown_seconds: 1800
+    cfwarp_wireguard_rotation_restore_last_good: true
+    cfwarp_masque_caps_checks: []
+    cfwarp_masque_caps_interval_seconds: 300
+    cfwarp_masque_rotation_enabled: false
+    cfwarp_masque_rotation_max_attempts_per_incident: 3
+    cfwarp_masque_rotation_settle_time_seconds: 12
+    cfwarp_masque_rotation_cooldown_seconds: 1800
+    cfwarp_masque_rotation_restore_last_good: true
 
     singbox_manage_router: true
     singbox_config_dir: /etc/sing-box
@@ -88,13 +104,17 @@
         state: directory
         mode: "0750"
 
-    - name: Ensure managed helper directory exists
+    - name: Ensure managed helper and state directories exist
       ansible.builtin.file:
-        path: "{{ singbox_managed_dir }}"
+        path: "{{ item.path }}"
         state: directory
         owner: root
         group: root
-        mode: "0755"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ singbox_managed_dir }}", mode: "0755" }
+        - { path: "{{ cfwarp_wireguard_data_dir }}", mode: "0755" }
+        - { path: "{{ cfwarp_masque_data_dir }}", mode: "0755" }
 
     - name: Copy dogfood compose file
       ansible.builtin.copy:
@@ -112,15 +132,82 @@
           CFWARP_MASQUE_PORT={{ cfwarp_masque_port }}
           CFWARP_WIREGUARD_STATE_DIR={{ cfwarp_wireguard_state_dir }}
           CFWARP_MASQUE_STATE_DIR={{ cfwarp_masque_state_dir }}
-          CFWARP_LOG_LEVEL={{ cfwarp_log_level }}
-          CFWARP_MASQUE_SNI={{ cfwarp_masque_sni }}
-          CFWARP_MASQUE_USE_IPV6={{ cfwarp_masque_use_ipv6 }}
-          CFWARP_MASQUE_CONNECT_PORT={{ cfwarp_masque_connect_port }}
-          CFWARP_MASQUE_MTU={{ cfwarp_masque_mtu }}
-          CFWARP_MASQUE_INITIAL_PACKET_SIZE={{ cfwarp_masque_initial_packet_size }}
-          CFWARP_MASQUE_KEEPALIVE_SECONDS={{ cfwarp_masque_keepalive_seconds }}
-          CFWARP_MASQUE_RECONNECT_DELAY_MILLIS={{ cfwarp_masque_reconnect_delay_millis }}
+          CFWARP_WIREGUARD_DATA_DIR={{ cfwarp_wireguard_data_dir }}
+          CFWARP_MASQUE_DATA_DIR={{ cfwarp_masque_data_dir }}
           TRACE_INTERVAL_SECONDS={{ trace_interval_seconds }}
+
+    - name: Write WireGuard daemon settings file
+      ansible.builtin.copy:
+        dest: "{{ cfwarp_wireguard_data_dir }}/settings.json"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          {{ {
+            'runtime_family': 'legacy',
+            'transport': 'wireguard',
+            'log_level': cfwarp_log_level,
+            'access': [
+              {
+                'type': 'socks5',
+                'listen_host': '0.0.0.0',
+                'listen_port': 1080
+              }
+            ],
+            'caps': {
+              'interval_seconds': cfwarp_wireguard_caps_interval_seconds,
+              'checks': cfwarp_wireguard_caps_checks | map('regex_replace', '^(.*)$', '{"probe":"\\1","required":false,"rotate_on_fail":true,"timeout_seconds":15}') | map('from_json') | list
+            },
+            'rotation': {
+              'enabled': cfwarp_wireguard_rotation_enabled,
+              'max_attempts_per_incident': cfwarp_wireguard_rotation_max_attempts_per_incident,
+              'settle_time_seconds': cfwarp_wireguard_rotation_settle_time_seconds,
+              'cooldown_seconds': cfwarp_wireguard_rotation_cooldown_seconds,
+              'restore_last_good': cfwarp_wireguard_rotation_restore_last_good,
+              'enroll_masque': false
+            }
+          } | to_nice_json }}
+
+    - name: Write MASQUE daemon settings file
+      ansible.builtin.copy:
+        dest: "{{ cfwarp_masque_data_dir }}/settings.json"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          {{ {
+            'runtime_family': 'native',
+            'transport': 'masque',
+            'log_level': cfwarp_log_level,
+            'masque_options': {
+              'sni': cfwarp_masque_sni,
+              'connect_port': cfwarp_masque_connect_port,
+              'use_ipv6': (cfwarp_masque_use_ipv6 | string | lower) in ['1','true','yes','on'],
+              'mtu': cfwarp_masque_mtu,
+              'initial_packet_size': cfwarp_masque_initial_packet_size,
+              'keepalive_period_seconds': cfwarp_masque_keepalive_seconds,
+              'reconnect_delay_millis': cfwarp_masque_reconnect_delay_millis
+            },
+            'access': [
+              {
+                'type': 'socks5',
+                'listen_host': '0.0.0.0',
+                'listen_port': 1080
+              }
+            ],
+            'caps': {
+              'interval_seconds': cfwarp_masque_caps_interval_seconds,
+              'checks': cfwarp_masque_caps_checks | map('regex_replace', '^(.*)$', '{"probe":"\\1","required":false,"rotate_on_fail":true,"timeout_seconds":15}') | map('from_json') | list
+            },
+            'rotation': {
+              'enabled': cfwarp_masque_rotation_enabled,
+              'max_attempts_per_incident': cfwarp_masque_rotation_max_attempts_per_incident,
+              'settle_time_seconds': cfwarp_masque_rotation_settle_time_seconds,
+              'cooldown_seconds': cfwarp_masque_rotation_cooldown_seconds,
+              'restore_last_good': cfwarp_masque_rotation_restore_last_good,
+              'enroll_masque': true
+            }
+          } | to_nice_json }}
 
     - name: Pull dogfood images
       ansible.builtin.command:

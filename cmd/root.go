@@ -38,6 +38,8 @@ func init() {
 		statusCmd,
 		unlockCmd,
 		rotateCmd,
+		daemonCmd,
+		validateCmd,
 		endpointCmd,
 		versionCmd,
 		serviceCmd,

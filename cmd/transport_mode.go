@@ -100,6 +100,11 @@ var modeSetCmd = &cobra.Command{
 		}
 		sett.Mode = args[0]
 		sett.ProxyMode = args[0]
+		if len(sett.Access) == 0 {
+			sett.Access = []state.AccessConfig{{Type: args[0], ListenHost: sett.ListenHost, ListenPort: sett.ListenPort, Username: sett.ProxyUsername, Password: sett.ProxyPassword}}
+		} else {
+			sett.Access[0].Type = args[0]
+		}
 		sett.Normalize()
 		if err := saveSettingsValidated(dirs, sett); err != nil {
 			return err

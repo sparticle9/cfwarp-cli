@@ -23,10 +23,14 @@ var unlockTimeout time.Duration
 
 var unlockTestCmd = &cobra.Command{
 	Use:   "test",
-	Short: "Test Gemini / ChatGPT / Claude availability through the configured proxy",
+	Short: "Test Gemini / ChatGPT availability through the configured proxy",
 	RunE: func(c *cobra.Command, args []string) error {
 		dirs := state.Resolve(globalStateDir, "")
 		sett, err := resolveSettings(c, dirs)
+		if err != nil {
+			return err
+		}
+		target, err := probeTargetFromSettings(sett)
 		if err != nil {
 			return err
 		}
@@ -35,10 +39,10 @@ var unlockTestCmd = &cobra.Command{
 			services = []string{unlock.ServiceGemini, unlock.ServiceChatGPT}
 		}
 		results, err := unlock.ProbeMany(c.Context(), unlock.Config{
-			ProxyMode: sett.Mode,
-			ProxyAddr: fmt.Sprintf("%s:%d", sett.ListenHost, sett.ListenPort),
-			Username:  sett.ProxyUsername,
-			Password:  sett.ProxyPassword,
+			ProxyMode: target.Type,
+			ProxyAddr: target.Address,
+			Username:  target.Username,
+			Password:  target.Password,
 			Timeout:   unlockTimeout,
 		}, services)
 		if err != nil {
@@ -78,17 +82,21 @@ func requireUnlockResults(results []unlock.Result) error {
 }
 
 func probeUnlockResults(ctx context.Context, sett state.Settings, services []string, timeout time.Duration) ([]unlock.Result, error) {
+	target, err := probeTargetFromSettings(sett)
+	if err != nil {
+		return nil, err
+	}
 	return unlock.ProbeMany(ctx, unlock.Config{
-		ProxyMode: sett.Mode,
-		ProxyAddr: fmt.Sprintf("%s:%d", sett.ListenHost, sett.ListenPort),
-		Username:  sett.ProxyUsername,
-		Password:  sett.ProxyPassword,
+		ProxyMode: target.Type,
+		ProxyAddr: target.Address,
+		Username:  target.Username,
+		Password:  target.Password,
 		Timeout:   timeout,
 	}, services)
 }
 
 func init() {
-	unlockTestCmd.Flags().StringSliceVar(&unlockServices, "service", nil, "unlock checks to run (gemini, chatgpt/openai, claude)")
+	unlockTestCmd.Flags().StringSliceVar(&unlockServices, "service", nil, "unlock checks to run (gemini, chatgpt/openai)")
 	unlockTestCmd.Flags().BoolVar(&unlockJSON, "json", false, "emit unlock results as JSON")
 	unlockTestCmd.Flags().DurationVar(&unlockTimeout, "timeout", 15*time.Second, "per-service HTTP timeout")
 	unlockCmd.AddCommand(unlockTestCmd)

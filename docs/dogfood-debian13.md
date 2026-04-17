@@ -41,6 +41,7 @@ See also:
   - dual-proxy stack
   - uses the same published cfwarp image for both protocol lanes
   - binds SOCKS listeners only on `127.0.0.1`
+  - uses per-service bind-mounted state directories so `settings.json` controls container behavior by default
   - optional `canary` profile runs curl-based trace containers through each proxy
 - `deploy/dogfood.env.example`
   - compose env file template
@@ -51,6 +52,7 @@ See also:
 
 - `ansible/dogfood-deploy.yml`
   - copies compose files to remote host
+  - writes per-service `settings.json` files into bind-mounted state directories
   - starts both proxies on localhost-only nonstandard ports `16080` and `16081`
   - can inject two local SOCKS outbounds into sing-box config when fragment files are available
   - adds `geosite-google-deepmind` rule-set routing to the managed cfwarp outbound
@@ -97,6 +99,10 @@ Copy the files under `deploy/` to the host, then:
 cd /opt/cfwarp-dogfood
 cp dogfood.env.example .env
 cp docker-compose.dogfood.yml docker-compose.yml
+mkdir -p state/wireguard state/masque
+
+# Write settings.json into each state directory before first start.
+# Those files control transport/access/caps/rotation behavior by default.
 
 docker compose --env-file .env -f docker-compose.yml up -d
 ```
@@ -124,6 +130,9 @@ docker exec cfwarp-warp cfwarp-cli status --json \
   --state-dir /home/cfwarp/.local/state/cfwarp-cli
 
 docker exec cfwarp-masque cfwarp-cli status --json \
+  --state-dir /home/cfwarp/.local/state/cfwarp-cli
+
+docker exec cfwarp-warp cfwarp-cli daemon ctl status \
   --state-dir /home/cfwarp/.local/state/cfwarp-cli
 ```
 
@@ -239,6 +248,9 @@ docker exec cfwarp-masque sh -lc 'cat /home/cfwarp/.local/state/cfwarp-cli/run/r
 docker exec cfwarp-masque sh -lc 'tail -n 40 /home/cfwarp/.local/state/cfwarp-cli/logs/backend.stderr.log'
 
 docker exec cfwarp-warp cfwarp-cli status --json --require-account --require-running --require-reachable \
+  --state-dir /home/cfwarp/.local/state/cfwarp-cli
+
+docker exec cfwarp-warp cfwarp-cli daemon ctl rotate \
   --state-dir /home/cfwarp/.local/state/cfwarp-cli
 ```
 

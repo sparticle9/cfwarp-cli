@@ -64,7 +64,6 @@ func runNativeRuntime(ctx context.Context, dirs state.Dirs, cmd *cobra.Command) 
 	eng.Start(ctx)
 	defer eng.Close()
 
-	listenAddr := fmt.Sprintf("%s:%d", sett.ListenHost, sett.ListenPort)
 	tracker := newRuntimeTracker(dirs, sett)
 	tracker.persistSnapshot(eng, stack)
 
@@ -84,23 +83,26 @@ func runNativeRuntime(ctx context.Context, dirs state.Dirs, cmd *cobra.Command) 
 		}
 	}()
 
-	var closeFn func() error
-	serveErrCh := make(chan error, 1)
-	switch sett.Mode {
-	case state.ModeSocks5:
-		socksCfg := socks.Config{ListenAddr: listenAddr, Username: sett.ProxyUsername, Password: sett.ProxyPassword}
-		srv := socks.New(socksCfg, stack)
-		closeFn = srv.Close
-		go func() { serveErrCh <- srv.ListenAndServe(socksCfg) }()
-	case state.ModeHTTP:
-		srv := httpproxy.New(httpproxy.Config{ListenAddr: listenAddr, Username: sett.ProxyUsername, Password: sett.ProxyPassword}, stack)
-		closeFn = srv.Close
-		go func() { serveErrCh <- srv.ListenAndServe() }()
-	default:
-		return fmt.Errorf("native MASQUE mode %q is not yet supported", sett.Mode)
+	closeFns := make([]func() error, 0, len(sett.Access))
+	serveErrCh := make(chan error, len(sett.Access))
+	for _, access := range sett.Access {
+		listenAddr := fmt.Sprintf("%s:%d", access.ListenHost, access.ListenPort)
+		switch access.Type {
+		case state.ModeSocks5:
+			socksCfg := socks.Config{ListenAddr: listenAddr, Username: access.Username, Password: access.Password}
+			srv := socks.New(socksCfg, stack)
+			closeFns = append(closeFns, srv.Close)
+			go func(cfg socks.Config, server *socks.Server) { serveErrCh <- server.ListenAndServe(cfg) }(socksCfg, srv)
+		case state.ModeHTTP:
+			srv := httpproxy.New(httpproxy.Config{ListenAddr: listenAddr, Username: access.Username, Password: access.Password}, stack)
+			closeFns = append(closeFns, srv.Close)
+			go func(server *httpproxy.Server) { serveErrCh <- server.ListenAndServe() }(srv)
+		default:
+			return fmt.Errorf("native MASQUE access type %q is not yet supported", access.Type)
+		}
 	}
 	defer func() {
-		if closeFn != nil {
+		for _, closeFn := range closeFns {
 			_ = closeFn()
 		}
 	}()

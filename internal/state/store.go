@@ -81,6 +81,26 @@ func LoadAccount(d Dirs) (AccountState, error) {
 	return acc, nil
 }
 
+// SaveLastGoodAccount writes acc to the daemon's last-known-good snapshot file.
+func SaveLastGoodAccount(d Dirs, acc AccountState) error {
+	acc.Normalize()
+	if err := os.MkdirAll(d.Config, 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	return writeSecure(d.LastGoodAccountFile(), acc)
+}
+
+// LoadLastGoodAccount reads the daemon's last-known-good account snapshot.
+func LoadLastGoodAccount(d Dirs) (AccountState, error) {
+	var acc AccountState
+	err := readJSON(d.LastGoodAccountFile(), &acc)
+	if err != nil {
+		return acc, err
+	}
+	acc.Normalize()
+	return acc, nil
+}
+
 // SaveSettings writes s to settings.json in d.Config.
 func SaveSettings(d Dirs, s Settings) error {
 	s.Normalize()

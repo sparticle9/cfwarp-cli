@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/nexus/cfwarp-cli/internal/state"
 )
@@ -31,6 +32,13 @@ var validLogLevels = map[string]bool{
 	"error": true,
 }
 
+var validCapProbes = map[string]bool{
+	"internet": true,
+	"warp":     true,
+	"gemini":   true,
+	"chatgpt":  true,
+}
+
 // Validate checks s for invalid or inconsistent values.
 // It returns the first error found, naming the offending field.
 func Validate(s state.Settings) error {
@@ -48,17 +56,37 @@ func Validate(s state.Settings) error {
 	if !validLogLevels[s.LogLevel] {
 		return fmt.Errorf("invalid log_level %q: must be one of %v", s.LogLevel, keys(validLogLevels))
 	}
-	if s.ListenPort < 1 || s.ListenPort > 65535 {
-		return fmt.Errorf("invalid listen_port %d: must be 1–65535", s.ListenPort)
-	}
-	// Auth: username and password must both be set or both be empty.
-	if (s.ProxyUsername == "") != (s.ProxyPassword == "") {
-		return fmt.Errorf("proxy_username and proxy_password must both be set or both be empty")
-	}
 	if s.EndpointOverride != "" {
 		if err := ValidateEndpoint(s.EndpointOverride); err != nil {
 			return fmt.Errorf("invalid endpoint_override: %w", err)
 		}
+	}
+	if len(s.Access) == 0 {
+		return fmt.Errorf("at least one access entry is required")
+	}
+	seen := map[string]bool{}
+	for i, access := range s.Access {
+		access.Type = strings.ToLower(strings.TrimSpace(access.Type))
+		if !validModes[access.Type] {
+			return fmt.Errorf("invalid access[%d].type %q: must be one of %v", i, access.Type, keys(validModes))
+		}
+		if access.Type == state.ModeTUN {
+			return fmt.Errorf("access[%d].type %q is not yet supported", i, access.Type)
+		}
+		if access.ListenHost == "" {
+			return fmt.Errorf("access[%d].listen_host is required", i)
+		}
+		if access.ListenPort < 1 || access.ListenPort > 65535 {
+			return fmt.Errorf("invalid access[%d].listen_port %d: must be 1–65535", i, access.ListenPort)
+		}
+		if (access.Username == "") != (access.Password == "") {
+			return fmt.Errorf("access[%d].username and access[%d].password must both be set or both be empty", i, i)
+		}
+		key := net.JoinHostPort(access.ListenHost, strconv.Itoa(access.ListenPort))
+		if seen[key] {
+			return fmt.Errorf("duplicate access listener %s", key)
+		}
+		seen[key] = true
 	}
 
 	supportedProxyModes := []string{state.ModeSocks5, state.ModeHTTP}
@@ -76,6 +104,34 @@ func Validate(s state.Settings) error {
 		}
 		if s.Mode != state.ModeSocks5 && s.Mode != state.ModeHTTP {
 			return fmt.Errorf("invalid mode %q for runtime_family %q: must be one of %v", s.Mode, s.RuntimeFamily, supportedProxyModes)
+		}
+	}
+
+	if s.Caps != nil {
+		if s.Caps.IntervalSeconds <= 0 {
+			return fmt.Errorf("invalid caps.interval_seconds %d: must be > 0", s.Caps.IntervalSeconds)
+		}
+		for i, check := range s.Caps.Checks {
+			if !validCapProbes[check.Probe] {
+				return fmt.Errorf("invalid caps.checks[%d].probe %q: must be one of %v", i, check.Probe, keys(validCapProbes))
+			}
+			if check.TimeoutSeconds <= 0 {
+				return fmt.Errorf("invalid caps.checks[%d].timeout_seconds %d: must be > 0", i, check.TimeoutSeconds)
+			}
+		}
+	}
+
+	if s.Rotation != nil {
+		if s.Rotation.Enabled {
+			if s.Rotation.MaxAttemptsPerIncident <= 0 {
+				return fmt.Errorf("invalid rotation.max_attempts_per_incident %d: must be > 0", s.Rotation.MaxAttemptsPerIncident)
+			}
+			if s.Rotation.SettleTimeSeconds <= 0 {
+				return fmt.Errorf("invalid rotation.settle_time_seconds %d: must be > 0", s.Rotation.SettleTimeSeconds)
+			}
+		}
+		if s.Rotation.CooldownSeconds < 0 {
+			return fmt.Errorf("invalid rotation.cooldown_seconds %d: must be >= 0", s.Rotation.CooldownSeconds)
 		}
 	}
 

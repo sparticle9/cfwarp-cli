@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -11,12 +12,31 @@ import (
 	"github.com/nexus/cfwarp-cli/internal/orchestrator"
 	"github.com/nexus/cfwarp-cli/internal/state"
 	"github.com/nexus/cfwarp-cli/internal/supervisor"
+	"github.com/spf13/cobra"
 )
 
 func startBackendRuntime(ctx context.Context, out io.Writer, dirs state.Dirs, sett state.Settings, foreground bool) (state.RuntimeState, error) {
 	acc, err := state.LoadAccount(dirs)
 	if err != nil {
-		return state.RuntimeState{}, fmt.Errorf("load account: %w", err)
+		if errors.Is(err, state.ErrNotFound) && autoRegisterOnStart() {
+			masque := sett.RuntimeFamily == state.RuntimeFamilyNative && sett.Transport == state.TransportMasque
+			if out != nil {
+				fmt.Fprintln(out, "No account registered; auto-registering on start…")
+			}
+			cmd := &cobra.Command{}
+			cmd.SetContext(ctx)
+			if out != nil {
+				cmd.SetOut(out)
+				cmd.SetErr(out)
+			}
+			if regErr := registerAccount(cmd, dirs, false, masque); regErr != nil {
+				return state.RuntimeState{}, fmt.Errorf("auto-register on start: %w", regErr)
+			}
+			acc, err = state.LoadAccount(dirs)
+		}
+		if err != nil {
+			return state.RuntimeState{}, fmt.Errorf("load account: %w", err)
+		}
 	}
 
 	b, err := configuredBackend(sett)

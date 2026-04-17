@@ -9,6 +9,7 @@ import (
 
 	"github.com/nexus/cfwarp-cli/internal/backend"
 	"github.com/nexus/cfwarp-cli/internal/settings"
+	"github.com/nexus/cfwarp-cli/internal/state"
 )
 
 const (
@@ -16,11 +17,11 @@ const (
 	wgMTU               = 1280
 	wgKeepalive         = 25
 	wgTag               = "wg-ep"
-	inboundTag          = "proxy-in"
 )
 
 // Render builds the sing-box JSON config from the provided RenderInput.
 func Render(input backend.RenderInput) ([]byte, error) {
+	input.Settings.Normalize()
 	peerAddr, peerPort, err := resolvePeerEndpoint(input)
 	if err != nil {
 		return nil, err
@@ -31,27 +32,17 @@ func Render(input backend.RenderInput) ([]byte, error) {
 		return nil, err
 	}
 
-	inboundType, err := inboundTypeFor(input.Settings.ProxyMode)
+	inbounds, err := buildInbounds(input.Settings.Access)
 	if err != nil {
 		return nil, err
 	}
-
-	users := buildUsers(input.Settings.ProxyUsername, input.Settings.ProxyPassword)
 
 	cfg := singboxConfig{
 		Log: logConfig{
 			Level:     input.Settings.LogLevel,
 			Timestamp: true,
 		},
-		Inbounds: []inbound{
-			{
-				Type:       inboundType,
-				Tag:        inboundTag,
-				Listen:     input.Settings.ListenHost,
-				ListenPort: input.Settings.ListenPort,
-				Users:      users,
-			},
-		},
+		Inbounds: inbounds,
 		Endpoints: []wgEndpoint{
 			{
 				Type:       "wireguard",
@@ -122,7 +113,7 @@ func ensurePrefix(addr string, bits int) string {
 	return fmt.Sprintf("%s/%d", addr, bits)
 }
 
-// inboundTypeFor maps proxy_mode to the sing-box inbound type string.
+// inboundTypeFor maps an access type to the sing-box inbound type string.
 func inboundTypeFor(mode string) (string, error) {
 	switch mode {
 	case "socks5":
@@ -130,8 +121,26 @@ func inboundTypeFor(mode string) (string, error) {
 	case "http":
 		return "http", nil
 	default:
-		return "", fmt.Errorf("unsupported proxy_mode %q: must be socks5 or http", mode)
+		return "", fmt.Errorf("unsupported access type %q: must be socks5 or http", mode)
 	}
+}
+
+func buildInbounds(accesses []state.AccessConfig) ([]inbound, error) {
+	inbounds := make([]inbound, 0, len(accesses))
+	for i, access := range accesses {
+		inboundType, err := inboundTypeFor(access.Type)
+		if err != nil {
+			return nil, err
+		}
+		inbounds = append(inbounds, inbound{
+			Type:       inboundType,
+			Tag:        fmt.Sprintf("proxy-in-%d", i+1),
+			Listen:     access.ListenHost,
+			ListenPort: access.ListenPort,
+			Users:      buildUsers(access.Username, access.Password),
+		})
+	}
+	return inbounds, nil
 }
 
 // buildUsers returns the users slice for the inbound.

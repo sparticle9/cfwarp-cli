@@ -28,6 +28,40 @@ type Overrides struct {
 	LogLevel         *string
 }
 
+func ensurePrimaryAccess(s *state.Settings) {
+	if len(s.Access) == 0 {
+		s.Access = []state.AccessConfig{{}}
+	}
+}
+
+func syncPrimaryAccessFromLegacy(s *state.Settings) {
+	ensurePrimaryAccess(s)
+	primary := s.Access[0]
+	if s.Mode != "" {
+		primary.Type = s.Mode
+	}
+	if s.ListenHost != "" {
+		primary.ListenHost = s.ListenHost
+	}
+	if s.ListenPort != 0 {
+		primary.ListenPort = s.ListenPort
+	}
+	if s.ProxyUsername != "" || s.ProxyPassword != "" {
+		primary.Username = s.ProxyUsername
+		primary.Password = s.ProxyPassword
+	}
+	if primary.Type == "" {
+		primary.Type = state.ModeSocks5
+	}
+	if primary.ListenHost == "" && primary.Type != state.ModeTUN {
+		primary.ListenHost = "0.0.0.0"
+	}
+	if primary.ListenPort == 0 && primary.Type != state.ModeTUN {
+		primary.ListenPort = 1080
+	}
+	s.Access[0] = primary
+}
+
 // Load builds the final Settings by layering:
 //
 //  1. Defaults (from state.DefaultSettings)
@@ -108,10 +142,23 @@ func applyPersisted(s *state.Settings, p state.Settings) {
 	if p.MasqueOptions != nil {
 		s.MasqueOptions = p.MasqueOptions
 	}
+	if p.Access != nil {
+		s.Access = p.Access
+	}
+	if p.Caps != nil {
+		s.Caps = p.Caps
+	}
+	if p.Rotation != nil {
+		s.Rotation = p.Rotation
+	}
+	if p.Daemon != nil {
+		s.Daemon = p.Daemon
+	}
 }
 
 // applyEnv reads CFWARP_* environment variables.
 func applyEnv(s *state.Settings) {
+	legacyAccessTouched := false
 	if v := os.Getenv("CFWARP_BACKEND"); v != "" {
 		s.Backend = v
 	}
@@ -123,25 +170,31 @@ func applyEnv(s *state.Settings) {
 	}
 	if v := os.Getenv("CFWARP_LISTEN_HOST"); v != "" {
 		s.ListenHost = v
+		legacyAccessTouched = true
 	}
 	if v := os.Getenv("CFWARP_LISTEN_PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			s.ListenPort = p
+			legacyAccessTouched = true
 		}
 	}
 	if v := os.Getenv("CFWARP_PROXY_MODE"); v != "" {
 		normalized := strings.ToLower(v)
 		s.ProxyMode = normalized
 		s.Mode = normalized
+		legacyAccessTouched = true
 	}
 	if v := os.Getenv("CFWARP_MODE"); v != "" {
 		s.Mode = strings.ToLower(v)
+		legacyAccessTouched = true
 	}
 	if v := os.Getenv("CFWARP_PROXY_USERNAME"); v != "" {
 		s.ProxyUsername = v
+		legacyAccessTouched = true
 	}
 	if v := os.Getenv("CFWARP_PROXY_PASSWORD"); v != "" {
 		s.ProxyPassword = v
+		legacyAccessTouched = true
 	}
 	if v := os.Getenv("CFWARP_ENDPOINT_OVERRIDE"); v != "" {
 		s.EndpointOverride = v
@@ -150,6 +203,12 @@ func applyEnv(s *state.Settings) {
 		s.LogLevel = strings.ToLower(v)
 	}
 	applyMasqueEnv(s)
+	applyCapsEnv(s)
+	applyRotationEnv(s)
+	applyDaemonEnv(s)
+	if legacyAccessTouched {
+		syncPrimaryAccessFromLegacy(s)
+	}
 }
 
 func applyMasqueEnv(s *state.Settings) {
@@ -206,6 +265,80 @@ func applyMasqueEnv(s *state.Settings) {
 	}
 }
 
+func applyCapsEnv(s *state.Settings) {
+	ensureCaps := func() *state.CapsOptions {
+		if s.Caps == nil {
+			s.Caps = &state.CapsOptions{}
+		}
+		return s.Caps
+	}
+	if v := os.Getenv("CFWARP_CAPS_INTERVAL_SECONDS"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil {
+			ensureCaps().IntervalSeconds = sec
+		}
+	}
+	if v := os.Getenv("CFWARP_CAPS_CHECKS"); v != "" {
+		parts := strings.Split(v, ",")
+		checks := make([]state.CapCheck, 0, len(parts))
+		for _, part := range parts {
+			probe := strings.ToLower(strings.TrimSpace(part))
+			if probe == "" {
+				continue
+			}
+			checks = append(checks, state.CapCheck{Probe: probe, RotateOnFail: true, TimeoutSeconds: 15})
+		}
+		ensureCaps().Checks = checks
+	}
+}
+
+func applyRotationEnv(s *state.Settings) {
+	ensureRotation := func() *state.RotationOptions {
+		if s.Rotation == nil {
+			s.Rotation = &state.RotationOptions{}
+		}
+		return s.Rotation
+	}
+	if v := os.Getenv("CFWARP_ROTATION_ENABLED"); v != "" {
+		if parsed, ok := parseBool(v); ok {
+			ensureRotation().Enabled = parsed
+		}
+	}
+	if v := os.Getenv("CFWARP_ROTATION_MAX_ATTEMPTS_PER_INCIDENT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			ensureRotation().MaxAttemptsPerIncident = n
+		}
+	}
+	if v := os.Getenv("CFWARP_ROTATION_SETTLE_TIME_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			ensureRotation().SettleTimeSeconds = n
+		}
+	}
+	if v := os.Getenv("CFWARP_ROTATION_COOLDOWN_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			ensureRotation().CooldownSeconds = n
+		}
+	}
+	if v := os.Getenv("CFWARP_ROTATION_RESTORE_LAST_GOOD"); v != "" {
+		if parsed, ok := parseBool(v); ok {
+			ensureRotation().RestoreLastGood = parsed
+		}
+	}
+	if v := os.Getenv("CFWARP_ROTATION_ENROLL_MASQUE"); v != "" {
+		if parsed, ok := parseBool(v); ok {
+			ensureRotation().EnrollMasque = parsed
+		}
+	}
+}
+
+func applyDaemonEnv(s *state.Settings) {
+	if v := os.Getenv("CFWARP_DAEMON_CONTROL_SOCKET"); v != "" {
+		if s.Daemon == nil {
+			s.Daemon = &state.DaemonOptions{}
+		}
+		s.Daemon.ControlSocket = v
+	}
+}
+
 func parseBool(v string) (bool, bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "1", "true", "yes", "on":
@@ -223,6 +356,7 @@ func isZeroMasqueOptions(o state.MasqueOptions) bool {
 
 // applyOverrides applies non-nil pointer fields from overrides onto s.
 func applyOverrides(s *state.Settings, o Overrides) {
+	legacyAccessTouched := false
 	if o.Backend != nil {
 		s.Backend = *o.Backend
 	}
@@ -234,28 +368,37 @@ func applyOverrides(s *state.Settings, o Overrides) {
 	}
 	if o.ListenHost != nil {
 		s.ListenHost = *o.ListenHost
+		legacyAccessTouched = true
 	}
 	if o.ListenPort != nil {
 		s.ListenPort = *o.ListenPort
+		legacyAccessTouched = true
 	}
 	if o.ProxyMode != nil {
 		normalized := strings.ToLower(*o.ProxyMode)
 		s.ProxyMode = normalized
 		s.Mode = normalized
+		legacyAccessTouched = true
 	}
 	if o.Mode != nil {
 		s.Mode = strings.ToLower(*o.Mode)
+		legacyAccessTouched = true
 	}
 	if o.ProxyUsername != nil {
 		s.ProxyUsername = *o.ProxyUsername
+		legacyAccessTouched = true
 	}
 	if o.ProxyPassword != nil {
 		s.ProxyPassword = *o.ProxyPassword
+		legacyAccessTouched = true
 	}
 	if o.EndpointOverride != nil {
 		s.EndpointOverride = *o.EndpointOverride
 	}
 	if o.LogLevel != nil {
 		s.LogLevel = strings.ToLower(*o.LogLevel)
+	}
+	if legacyAccessTouched {
+		syncPrimaryAccessFromLegacy(s)
 	}
 }

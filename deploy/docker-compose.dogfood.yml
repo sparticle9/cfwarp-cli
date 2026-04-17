@@ -6,13 +6,9 @@ services:
     ports:
       - 127.0.0.1:${CFWARP_WIREGUARD_PORT:-16080}:1080
     environment:
-      CFWARP_LISTEN_HOST: "0.0.0.0"
-      CFWARP_LISTEN_PORT: "1080"
-      CFWARP_PROXY_MODE: "socks5"
-      CFWARP_LOG_LEVEL: ${CFWARP_LOG_LEVEL:-info}
       CFWARP_STATE_DIR: ${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     volumes:
-      - cfwarp-wireguard-state:${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
+      - ${CFWARP_WIREGUARD_DATA_DIR:-./state/wireguard}:${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
 
   masque:
     image: ${CFWARP_IMAGE:-ghcr.io/sparticle9/cfwarp-cli:latest}
@@ -21,15 +17,9 @@ services:
     ports:
       - 127.0.0.1:${CFWARP_MASQUE_PORT:-16081}:1080
     environment:
-      CFWARP_RUNTIME_FAMILY: "native"
-      CFWARP_TRANSPORT: "masque"
-      CFWARP_MODE: "socks5"
-      CFWARP_LISTEN_HOST: "0.0.0.0"
-      CFWARP_LISTEN_PORT: "1080"
-      CFWARP_LOG_LEVEL: ${CFWARP_LOG_LEVEL:-info}
       CFWARP_STATE_DIR: ${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     volumes:
-      - cfwarp-masque-state:${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
+      - ${CFWARP_MASQUE_DATA_DIR:-./state/masque}:${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
 
   trace-wireguard:
     profiles: ["canary"]
@@ -89,6 +79,3 @@ services:
           sleep "$${TRACE_INTERVAL_SECONDS}"
         done
 
-volumes:
-  cfwarp-wireguard-state:
-  cfwarp-masque-state:

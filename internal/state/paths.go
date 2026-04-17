@@ -77,8 +77,14 @@ func (d Dirs) AccountFile() string { return filepath.Join(d.Config, "account.jso
 // SettingsFile returns the path to settings.json inside the config root.
 func (d Dirs) SettingsFile() string { return filepath.Join(d.Config, "settings.json") }
 
+// LastGoodAccountFile returns the path to the daemon's last-known-good account snapshot.
+func (d Dirs) LastGoodAccountFile() string { return filepath.Join(d.Config, "last-good-account.json") }
+
 // RuntimeFile returns the path to runtime.json inside the runtime root.
 func (d Dirs) RuntimeFile() string { return filepath.Join(d.Runtime, "runtime.json") }
+
+// DaemonSocketFile returns the default daemon control socket path.
+func (d Dirs) DaemonSocketFile() string { return filepath.Join(d.Runtime, "daemon.sock") }
 
 // BackendConfigFile returns the path for the rendered backend config.
 func (d Dirs) BackendConfigFile() string { return filepath.Join(d.Runtime, "backend.json") }

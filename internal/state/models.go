@@ -169,20 +169,64 @@ type MasqueOptions struct {
 	ReconnectDelayMillis   int    `json:"reconnect_delay_millis,omitempty"`
 }
 
+// AccessConfig describes how local clients consume the configured uplink.
+type AccessConfig struct {
+	Type       string `json:"type,omitempty"`
+	ListenHost string `json:"listen_host,omitempty"`
+	ListenPort int    `json:"listen_port,omitempty"`
+	Username   string `json:"username,omitempty"`
+	Password   string `json:"password,omitempty"`
+	Name       string `json:"name,omitempty"`
+	MTU        int    `json:"mtu,omitempty"`
+}
+
+// CapCheck defines one built-in capability probe evaluated by the daemon.
+type CapCheck struct {
+	Probe          string `json:"probe,omitempty"`
+	Required       bool   `json:"required,omitempty"`
+	RotateOnFail   bool   `json:"rotate_on_fail,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+}
+
+// CapsOptions groups the daemon's capability probe policy.
+type CapsOptions struct {
+	IntervalSeconds int        `json:"interval_seconds,omitempty"`
+	Checks          []CapCheck `json:"checks,omitempty"`
+}
+
+// RotationOptions controls how the daemon remediates failed capability probes.
+type RotationOptions struct {
+	Enabled                bool `json:"enabled,omitempty"`
+	MaxAttemptsPerIncident int  `json:"max_attempts_per_incident,omitempty"`
+	SettleTimeSeconds      int  `json:"settle_time_seconds,omitempty"`
+	CooldownSeconds        int  `json:"cooldown_seconds,omitempty"`
+	RestoreLastGood        bool `json:"restore_last_good,omitempty"`
+	EnrollMasque           bool `json:"enroll_masque,omitempty"`
+}
+
+// DaemonOptions configures the long-running manager process.
+type DaemonOptions struct {
+	ControlSocket string `json:"control_socket,omitempty"`
+}
+
 // Settings holds operator-supplied configuration persisted to settings.json.
 type Settings struct {
-	SchemaVersion    int            `json:"-"`
-	RuntimeFamily    string         `json:"-"`
-	Transport        string         `json:"-"`
-	Mode             string         `json:"-"`
-	ListenHost       string         `json:"-"`
-	ListenPort       int            `json:"-"`
-	ProxyUsername    string         `json:"-"`
-	ProxyPassword    string         `json:"-"`
-	EndpointOverride string         `json:"-"`
-	StateDir         string         `json:"-"`
-	LogLevel         string         `json:"-"`
-	MasqueOptions    *MasqueOptions `json:"-"`
+	SchemaVersion    int              `json:"-"`
+	RuntimeFamily    string           `json:"-"`
+	Transport        string           `json:"-"`
+	Mode             string           `json:"-"`
+	ListenHost       string           `json:"-"`
+	ListenPort       int              `json:"-"`
+	ProxyUsername    string           `json:"-"`
+	ProxyPassword    string           `json:"-"`
+	EndpointOverride string           `json:"-"`
+	StateDir         string           `json:"-"`
+	LogLevel         string           `json:"-"`
+	MasqueOptions    *MasqueOptions   `json:"-"`
+	Access           []AccessConfig   `json:"-"`
+	Caps             *CapsOptions     `json:"-"`
+	Rotation         *RotationOptions `json:"-"`
+	Daemon           *DaemonOptions   `json:"-"`
 
 	// Deprecated in-memory aliases retained for incremental migration.
 	Backend   string `json:"-"`
@@ -190,20 +234,24 @@ type Settings struct {
 }
 
 type settingsJSON struct {
-	SchemaVersion    int            `json:"schema_version,omitempty"`
-	RuntimeFamily    string         `json:"runtime_family,omitempty"`
-	Transport        string         `json:"transport,omitempty"`
-	Mode             string         `json:"mode,omitempty"`
-	ListenHost       string         `json:"listen_host,omitempty"`
-	ListenPort       int            `json:"listen_port,omitempty"`
-	ProxyUsername    string         `json:"proxy_username,omitempty"`
-	ProxyPassword    string         `json:"proxy_password,omitempty"`
-	EndpointOverride string         `json:"endpoint_override,omitempty"`
-	StateDir         string         `json:"state_dir,omitempty"`
-	LogLevel         string         `json:"log_level,omitempty"`
-	MasqueOptions    *MasqueOptions `json:"masque_options,omitempty"`
-	Backend          string         `json:"backend,omitempty"`
-	ProxyMode        string         `json:"proxy_mode,omitempty"`
+	SchemaVersion    int              `json:"schema_version,omitempty"`
+	RuntimeFamily    string           `json:"runtime_family,omitempty"`
+	Transport        string           `json:"transport,omitempty"`
+	Mode             string           `json:"mode,omitempty"`
+	ListenHost       string           `json:"listen_host,omitempty"`
+	ListenPort       int              `json:"listen_port,omitempty"`
+	ProxyUsername    string           `json:"proxy_username,omitempty"`
+	ProxyPassword    string           `json:"proxy_password,omitempty"`
+	EndpointOverride string           `json:"endpoint_override,omitempty"`
+	StateDir         string           `json:"state_dir,omitempty"`
+	LogLevel         string           `json:"log_level,omitempty"`
+	MasqueOptions    *MasqueOptions   `json:"masque_options,omitempty"`
+	Access           []AccessConfig   `json:"access,omitempty"`
+	Caps             *CapsOptions     `json:"caps,omitempty"`
+	Rotation         *RotationOptions `json:"rotation,omitempty"`
+	Daemon           *DaemonOptions   `json:"daemon,omitempty"`
+	Backend          string           `json:"backend,omitempty"`
+	ProxyMode        string           `json:"proxy_mode,omitempty"`
 }
 
 // DefaultSettings returns a Settings with sane defaults.
@@ -219,7 +267,6 @@ func DefaultSettings() Settings {
 		Backend:       BackendSingboxWireGuard,
 		ProxyMode:     ModeSocks5,
 	}
-	s.Normalize()
 	return s
 }
 
@@ -248,18 +295,104 @@ func (s *Settings) Normalize() {
 	if s.Mode == "" {
 		s.Mode = s.ProxyMode
 	}
+	if s.ProxyMode != "" && s.ProxyMode != s.Mode {
+		switch {
+		case s.Mode == ModeSocks5 && s.ProxyMode != ModeSocks5:
+			s.Mode = s.ProxyMode
+		case s.ProxyMode == ModeSocks5 && s.Mode != ModeSocks5:
+			// keep explicit mode override
+		default:
+			s.Mode = s.ProxyMode
+		}
+	}
+	if s.Mode == "" {
+		s.Mode = ModeSocks5
+	}
 	if s.Mode != "" {
 		s.ProxyMode = s.Mode
 	}
 	if derived := DeriveBackendTag(s.RuntimeFamily, s.Transport); derived != "" {
 		s.Backend = derived
 	}
+	if s.Caps != nil {
+		if s.Caps.IntervalSeconds == 0 {
+			s.Caps.IntervalSeconds = 300
+		}
+		for i := range s.Caps.Checks {
+			s.Caps.Checks[i].Probe = strings.ToLower(strings.TrimSpace(s.Caps.Checks[i].Probe))
+			if s.Caps.Checks[i].TimeoutSeconds == 0 {
+				s.Caps.Checks[i].TimeoutSeconds = 15
+			}
+		}
+	}
+	for i := range s.Access {
+		s.Access[i].Type = strings.ToLower(strings.TrimSpace(s.Access[i].Type))
+		if s.Access[i].Type != ModeTUN && s.Access[i].ListenHost == "" {
+			s.Access[i].ListenHost = "0.0.0.0"
+		}
+	}
+	if len(s.Access) == 0 {
+		s.Access = []AccessConfig{{
+			Type:       s.Mode,
+			ListenHost: defaultString(s.ListenHost, "0.0.0.0"),
+			ListenPort: defaultInt(s.ListenPort, 1080),
+			Username:   s.ProxyUsername,
+			Password:   s.ProxyPassword,
+		}}
+	}
+	primary := s.Access[0]
+	if primary.Type == "" {
+		primary.Type = s.Mode
+	}
+	s.Access[0] = primary
+	s.Mode = primary.Type
+	s.ProxyMode = primary.Type
+	s.ListenHost = primary.ListenHost
+	s.ListenPort = primary.ListenPort
+	s.ProxyUsername = primary.Username
+	s.ProxyPassword = primary.Password
+}
+
+func defaultString(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+func defaultInt(v, fallback int) int {
+	if v == 0 {
+		return fallback
+	}
+	return v
+}
+
+func accessMatchesLegacy(s Settings) bool {
+	if len(s.Access) != 1 {
+		return false
+	}
+	access := s.Access[0]
+	return access.Type == s.Mode &&
+		access.ListenHost == s.ListenHost &&
+		access.ListenPort == s.ListenPort &&
+		access.Username == s.ProxyUsername &&
+		access.Password == s.ProxyPassword &&
+		access.Name == "" &&
+		access.MTU == 0
+}
+
+func zeroRotation(o *RotationOptions) bool {
+	return o == nil || (!o.Enabled && o.MaxAttemptsPerIncident == 0 && o.SettleTimeSeconds == 0 && o.CooldownSeconds == 0 && !o.RestoreLastGood && !o.EnrollMasque)
+}
+
+func zeroDaemon(o *DaemonOptions) bool {
+	return o == nil || o.ControlSocket == ""
 }
 
 func (s Settings) MarshalJSON() ([]byte, error) {
 	ss := s
 	ss.Normalize()
-	return json.Marshal(settingsJSON{
+	payload := settingsJSON{
 		SchemaVersion:    ss.SchemaVersion,
 		RuntimeFamily:    ss.RuntimeFamily,
 		Transport:        ss.Transport,
@@ -272,7 +405,18 @@ func (s Settings) MarshalJSON() ([]byte, error) {
 		StateDir:         ss.StateDir,
 		LogLevel:         ss.LogLevel,
 		MasqueOptions:    ss.MasqueOptions,
-	})
+		Caps:             ss.Caps,
+	}
+	if !accessMatchesLegacy(ss) {
+		payload.Access = ss.Access
+	}
+	if !zeroRotation(ss.Rotation) {
+		payload.Rotation = ss.Rotation
+	}
+	if !zeroDaemon(ss.Daemon) {
+		payload.Daemon = ss.Daemon
+	}
+	return json.Marshal(payload)
 }
 
 func (s *Settings) UnmarshalJSON(data []byte) error {
@@ -317,6 +461,24 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	}
 	if raw.MasqueOptions != nil {
 		s.MasqueOptions = raw.MasqueOptions
+	}
+	if raw.Access != nil {
+		s.Access = raw.Access
+	} else {
+		s.Access = nil
+	}
+	if raw.Caps != nil {
+		s.Caps = raw.Caps
+	}
+	if raw.Rotation != nil {
+		s.Rotation = raw.Rotation
+	} else {
+		s.Rotation = nil
+	}
+	if raw.Daemon != nil {
+		s.Daemon = raw.Daemon
+	} else {
+		s.Daemon = nil
 	}
 	if raw.Backend != "" {
 		s.Backend = raw.Backend
