@@ -75,6 +75,7 @@ This matters because the fastest raw tunnel is not always the best fit for real 
 - `docs/benchmark-package.md` — entry point for sharing the benchmark work internally
 - `docs/benchmark-mechanism.md` — benchmark harness design, phases, and result semantics
 - `docs/benchmark-report-case.md` — interpretation of the latest benchmark set for the intended workload mix
+- `docs/dogfood-debian13.md` — Debian 13 dogfood runbook for dual localhost-bound WireGuard and MASQUE proxies
 - `docs/status/2026-04-native-masque-status.md` — public status memo for native MASQUE support
 - `docs/specs/001-minimal-wireguard-proxy/requirements.md` — MVP requirements
 - `docs/specs/001-minimal-wireguard-proxy/design.md` — MVP design and Docker deployment
@@ -86,12 +87,13 @@ Implemented today:
 
 - `cfwarp-cli` Docker-oriented WireGuard backend flow
 - experimental native MASQUE HTTP/SOCKS runtime path
-- manual Alpine package workflow for branch builds
+- multi-arch GHCR container publishing workflow for Alpine and Debian variants
 - published-image benchmark harness
 - comparison against original `MicroWARP`
 - protocol-focused real-target bench with vanilla `usque`, remote `iperf3`, and remote HTTP transfer
 - raw tunnel + API-like workload benchmarking
 - markdown/JSON report generation with per-container resource summaries
+- dogfood-oriented deploy and status playbooks for remote Docker hosts
 
 Not implemented yet:
 
@@ -109,6 +111,11 @@ Current stable path:
 Current experimental path:
 
 - native MASQUE
+
+Current dogfood posture:
+
+- use `singbox-wireguard` as the default lane for real daemon traffic
+- run native MASQUE alongside it on a second localhost-bound port for verification and comparison
 
 Recent MASQUE work completed:
 

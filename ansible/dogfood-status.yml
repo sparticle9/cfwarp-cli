@@ -1,0 +1,144 @@
+---
+# dogfood-status.yml — inspect remote dogfood stack without opening dashboards.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit warp
+#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit warp \
+#     -e dogfood_verify_trace=true
+
+- name: Inspect cfwarp dogfood stack
+  hosts: warp
+  become: true
+  gather_facts: false
+
+  vars:
+    compose_dir: /opt/cfwarp-dogfood
+    compose_file: docker-compose.yml
+    dogfood_verify_trace: false
+    cfwarp_wireguard_port: 18080
+    cfwarp_masque_port: 18081
+    cfwarp_wireguard_state_dir: /home/cfwarp/.local/state/cfwarp-cli
+    cfwarp_masque_state_dir: /home/cfwarp/.local/state/cfwarp-cli
+    proxy_checks:
+      - name: wireguard
+        container_name: cfwarp-warp
+        proxy_port: "{{ cfwarp_wireguard_port }}"
+        state_dir: "{{ cfwarp_wireguard_state_dir }}"
+      - name: masque
+        container_name: cfwarp-masque
+        proxy_port: "{{ cfwarp_masque_port }}"
+        state_dir: "{{ cfwarp_masque_state_dir }}"
+
+  tasks:
+    - name: Show docker compose ps
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - -f
+          - "{{ compose_file }}"
+          - ps
+      args:
+        chdir: "{{ compose_dir }}"
+      register: compose_ps
+      changed_when: false
+
+    - name: Print compose ps
+      ansible.builtin.debug:
+        msg: "{{ compose_ps.stdout_lines }}"
+
+    - name: Inspect container state and health
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{{ '{{json .State}}' }}"
+          - "{{ item.container_name }}"
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: inspect_state
+      changed_when: false
+
+    - name: Show container state and health
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} =>
+          {{ item.stdout }}
+      loop: "{{ inspect_state.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Capture cfwarp-cli status JSON inside each container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - "{{ item.container_name }}"
+          - cfwarp-cli
+          - status
+          - --json
+          - --state-dir
+          - "{{ item.state_dir }}"
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: runtime_status
+      changed_when: false
+
+    - name: Print runtime status JSON
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} =>
+          {{ item.stdout }}
+      loop: "{{ runtime_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Verify live Cloudflare trace through each localhost proxy when requested
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL --max-time 20 --proxy "socks5h://127.0.0.1:{{ item.proxy_port }}" https://www.cloudflare.com/cdn-cgi/trace
+      args:
+        executable: /bin/bash
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: trace_results
+      changed_when: false
+      when: dogfood_verify_trace | bool
+
+    - name: Print trace output
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} =>
+          {{ item.stdout_lines }}
+      loop: "{{ trace_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: dogfood_verify_trace | bool
+
+    - name: Tail recent logs for each proxy container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - logs
+          - --tail
+          - "80"
+          - "{{ item.container_name }}"
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: recent_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Print recent logs
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} =>
+          {{ item.stderr if item.stderr else item.stdout }}
+      loop: "{{ recent_logs.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

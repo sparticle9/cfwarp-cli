@@ -3,9 +3,9 @@
 # Purpose: A/B performance benchmarking against the Alpine+gcompat image.
 # Security: gcr.io/distroless/base-debian12:nonroot — no shell, no package manager.
 #
-# NOTE: distroless has no shell, so auto-registration must be done before first
-# run (pre-populate the state volume) or via CFWARP_REGISTER_ON_START=1 which
-# is handled inside the Go binary's up command (see cmd/up.go auto-register flag).
+# NOTE: distroless has no shell, so first-run bootstrap must happen inside the
+# Go binary. cmd/up.go now honors CFWARP_REGISTER_ON_START=1, which keeps the
+# Debian image first-run friendly without adding a shell wrapper.
 
 ARG SINGBOX_VERSION=1.13.5
 ARG DEBIAN_VERSION=13
@@ -27,6 +27,7 @@ RUN CGO_ENABLED=0 go build \
       -X github.com/nexus/cfwarp-cli/internal/version.Commit=${COMMIT} \
       -X github.com/nexus/cfwarp-cli/internal/version.Date=${BUILD_DATE}" \
     -o /out/cfwarp-cli .
+RUN mkdir -p /out/home/nonroot/.local/state/cfwarp-cli
 
 # ── Stage 2: Fetch sing-box for target arch ──────────────────────────────────
 FROM alpine:3.23 AS singbox
@@ -41,18 +42,19 @@ RUN apk add --no-cache curl ca-certificates && \
     install -m 0755 /tmp/sing-box /out/sing-box
 
 # ── Stage 3: Distroless runtime — native glibc, no shell, non-root ───────────
-# :nonroot sets USER to 65532 (nobody). State dir must be pre-created via volume.
 FROM gcr.io/distroless/base-debian${DEBIAN_VERSION}:nonroot
 
 ENV HOME=/home/nonroot \
-    CFWARP_STATE_DIR=/home/nonroot/.local/state/cfwarp-cli
+    CFWARP_STATE_DIR=/home/nonroot/.local/state/cfwarp-cli \
+    CFWARP_REGISTER_ON_START=1
 
 COPY --from=builder  /out/cfwarp-cli   /usr/local/bin/cfwarp-cli
 COPY --from=singbox  /out/sing-box     /usr/local/bin/sing-box
+COPY --from=builder --chown=65532:65532 /out/home/nonroot/.local/state/cfwarp-cli /home/nonroot/.local/state/cfwarp-cli
 
 VOLUME /home/nonroot/.local/state/cfwarp-cli
 EXPOSE 1080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+  CMD ["/usr/local/bin/cfwarp-cli", "status", "--state-dir", "/home/nonroot/.local/state/cfwarp-cli", "--require-account", "--require-running", "--require-reachable"]
 
-# distroless:nonroot already sets USER 65532; state volume must be mounted
-# with matching ownership (chown 65532:65532) before first start.
 ENTRYPOINT ["/usr/local/bin/cfwarp-cli", "up", "--foreground"]

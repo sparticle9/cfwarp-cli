@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/nexus/cfwarp-cli/internal/backend"
 	"github.com/nexus/cfwarp-cli/internal/orchestrator"
@@ -29,17 +31,27 @@ foreground (useful for Docker entrypoints).`,
 			return fmt.Errorf("prepare state directories: %w", err)
 		}
 
-		acc, err := state.LoadAccount(dirs)
-		if err != nil {
-			if errors.Is(err, state.ErrNotFound) {
-				return fmt.Errorf("no account registered; run 'cfwarp-cli register' first")
-			}
-			return fmt.Errorf("load account: %w", err)
-		}
-
 		sett, err := resolveSettings(c, dirs)
 		if err != nil {
 			return fmt.Errorf("resolve settings: %w", err)
+		}
+
+		acc, err := state.LoadAccount(dirs)
+		if err != nil {
+			if errors.Is(err, state.ErrNotFound) && autoRegisterOnStart() {
+				masque := sett.RuntimeFamily == state.RuntimeFamilyNative && sett.Transport == state.TransportMasque
+				fmt.Fprintln(c.OutOrStdout(), "No account registered; auto-registering on start…")
+				if err := registerAccount(c, dirs, false, masque); err != nil {
+					return fmt.Errorf("auto-register on start: %w", err)
+				}
+				acc, err = state.LoadAccount(dirs)
+			}
+			if err != nil {
+				if errors.Is(err, state.ErrNotFound) {
+					return fmt.Errorf("no account registered; run 'cfwarp-cli register' first")
+				}
+				return fmt.Errorf("load account: %w", err)
+			}
 		}
 
 		b, err := configuredBackend(sett)
@@ -88,6 +100,15 @@ foreground (useful for Docker entrypoints).`,
 		}
 		return nil
 	},
+}
+
+func autoRegisterOnStart() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CFWARP_REGISTER_ON_START"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func init() {

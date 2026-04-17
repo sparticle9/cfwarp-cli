@@ -14,6 +14,10 @@ import (
 
 var statusJSON bool
 var statusTrace bool
+var statusRequireAccount bool
+var statusRequireRunning bool
+var statusRequireReachable bool
+var statusRequireWarp bool
 
 // StatusReport is the machine-readable status output.
 type StatusReport struct {
@@ -37,14 +41,17 @@ type StatusReport struct {
 }
 
 var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Report proxy configuration, process, and health state",
+	Use:           "status",
+	Short:         "Report proxy configuration, process, and health state",
+	SilenceErrors: true,
 	Long: `status checks whether account state is configured, the backend process is
 running, and the local proxy port is reachable.
 
 Use --json for machine-readable output.
 Use --trace to also probe cdn-cgi/trace through the proxy (requires live network).`,
 	RunE: func(c *cobra.Command, args []string) error {
+		traceEnabled := statusTrace || statusRequireWarp
+
 		dirs := state.Resolve(globalStateDir, "")
 
 		report := StatusReport{}
@@ -109,7 +116,7 @@ Use --trace to also probe cdn-cgi/trace through the proxy (requires live network
 		}
 
 		// 5. Optional cdn-cgi/trace probe.
-		if statusTrace && settErr == nil {
+		if traceEnabled && settErr == nil {
 			proxyAddr := fmt.Sprintf("%s:%d", sett.ListenHost, sett.ListenPort)
 			result, err := health.ProbeTrace(c.Context(), sett.Mode, proxyAddr, sett.ProxyUsername, sett.ProxyPassword)
 			if err != nil {
@@ -126,11 +133,16 @@ Use --trace to also probe cdn-cgi/trace through the proxy (requires live network
 			}
 		}
 
+		reqErr := requireStatus(report)
+
 		if statusJSON {
-			return printJSON(c, report)
+			if err := printJSON(c, report); err != nil {
+				return err
+			}
+		} else {
+			printHuman(c, report, accErr, rtErr)
 		}
-		printHuman(c, report, accErr, rtErr)
-		return nil
+		return reqErr
 	},
 }
 
@@ -138,6 +150,30 @@ func printJSON(c *cobra.Command, r StatusReport) error {
 	enc := json.NewEncoder(c.OutOrStdout())
 	enc.SetIndent("", "  ")
 	return enc.Encode(r)
+}
+
+func requireStatus(r StatusReport) error {
+	if statusRequireAccount && !r.AccountConfigured {
+		return fmt.Errorf("account not configured")
+	}
+	if statusRequireRunning && !r.BackendRunning {
+		return fmt.Errorf("backend not running")
+	}
+	if statusRequireReachable && !r.LocalReachable {
+		return fmt.Errorf("proxy not locally reachable")
+	}
+	if statusRequireWarp {
+		if r.WARPVerified == nil {
+			if r.LastError != "" {
+				return fmt.Errorf("warp verification unavailable: %s", r.LastError)
+			}
+			return fmt.Errorf("warp verification unavailable")
+		}
+		if !*r.WARPVerified {
+			return fmt.Errorf("warp not verified")
+		}
+	}
+	return nil
 }
 
 func printHuman(c *cobra.Command, r StatusReport, accErr, rtErr error) {
@@ -215,4 +251,8 @@ func printHuman(c *cobra.Command, r StatusReport, accErr, rtErr error) {
 func init() {
 	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "emit status as JSON")
 	statusCmd.Flags().BoolVar(&statusTrace, "trace", false, "probe cdn-cgi/trace through the proxy (requires live network)")
+	statusCmd.Flags().BoolVar(&statusRequireAccount, "require-account", false, "exit non-zero unless account state is configured")
+	statusCmd.Flags().BoolVar(&statusRequireRunning, "require-running", false, "exit non-zero unless the backend process is running")
+	statusCmd.Flags().BoolVar(&statusRequireReachable, "require-reachable", false, "exit non-zero unless the local proxy listener is reachable")
+	statusCmd.Flags().BoolVar(&statusRequireWarp, "require-warp", false, "exit non-zero unless a trace probe verifies warp=on (implies --trace)")
 }

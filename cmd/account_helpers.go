@@ -16,11 +16,15 @@ import (
 
 func runRegister(c *cobra.Command) error {
 	dirs := state.Resolve(globalStateDir, "")
+	return registerAccount(c, dirs, registerForce, registerMasque)
+}
+
+func registerAccount(c *cobra.Command, dirs state.Dirs, force bool, masque bool) error {
 	if err := dirs.MkdirAll(); err != nil {
 		return fmt.Errorf("prepare state directories: %w", err)
 	}
 
-	if _, err := state.LoadAccount(dirs); err == nil && !registerForce {
+	if _, err := state.LoadAccount(dirs); err == nil && !force {
 		return fmt.Errorf("account already registered at %s; use --force to overwrite", dirs.AccountFile())
 	} else if err != nil && !errors.Is(err, state.ErrNotFound) {
 		return fmt.Errorf("read existing account: %w", err)
@@ -53,7 +57,7 @@ func runRegister(c *cobra.Command) error {
 		CreatedAt:        time.Now().UTC(),
 		Source:           "register",
 	}
-	if registerMasque {
+	if masque {
 		fmt.Fprintln(c.OutOrStdout(), "Enrolling MASQUE key…")
 		privDER, pubDER, err := masquetransport.GenerateECDSAKeypairDER()
 		if err != nil {
@@ -65,7 +69,7 @@ func runRegister(c *cobra.Command) error {
 		}
 		acc.Masque = cloudflare.BuildMasqueState(privDER, enrollment)
 	}
-	if err := state.SaveAccount(dirs, acc, registerForce); err != nil {
+	if err := state.SaveAccount(dirs, acc, force); err != nil {
 		return fmt.Errorf("save account: %w", err)
 	}
 

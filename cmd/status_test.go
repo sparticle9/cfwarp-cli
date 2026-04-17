@@ -18,6 +18,14 @@ func execStatus(t *testing.T, dirs state.Dirs, extraArgs ...string) (string, err
 	t.Helper()
 	buf := &bytes.Buffer{}
 	args := append([]string{"status", "--state-dir", dirs.Config}, extraArgs...)
+
+	statusJSON = false
+	statusTrace = false
+	statusRequireAccount = false
+	statusRequireRunning = false
+	statusRequireReachable = false
+	statusRequireWarp = false
+
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
 	rootCmd.SetArgs(args)
@@ -303,5 +311,61 @@ func TestStatus_JSON_IncludesRuntimeDiagnostics(t *testing.T) {
 	}
 	if report.Diagnostics == nil || report.Diagnostics.Transport.PacketsRead != 7 || report.Diagnostics.Netstack.WriteCalls != 9 {
 		t.Fatalf("expected runtime diagnostics in report, got %+v", report.Diagnostics)
+	}
+}
+
+func TestStatus_RequireAccount_FailsButStillPrintsJSON(t *testing.T) {
+	d := tempStatusDirs(t)
+	out, err := execStatus(t, d, "--json", "--require-account")
+	if err == nil {
+		t.Fatal("expected require-account to fail without account state")
+	}
+
+	var report StatusReport
+	if jsonErr := json.Unmarshal([]byte(out), &report); jsonErr != nil {
+		t.Fatalf("unmarshal JSON: %v\noutput: %s", jsonErr, out)
+	}
+	if report.AccountConfigured {
+		t.Fatal("expected account_configured=false")
+	}
+}
+
+func TestStatus_RequireRunning_FailsForStaleRuntime(t *testing.T) {
+	d := tempStatusDirs(t)
+	writeAccount(t, d)
+	writeRuntime(t, d, 99999999, "exit status 1")
+
+	_, err := execStatus(t, d, "--require-running")
+	if err == nil {
+		t.Fatal("expected require-running to fail for stale runtime")
+	}
+}
+
+func TestStatus_RequireReachable_PassesForListeningProxy(t *testing.T) {
+	d := tempStatusDirs(t)
+	writeAccount(t, d)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	out, err := execStatus(t, d, "--listen-port", portStr, "--require-reachable")
+	if err != nil {
+		t.Fatalf("expected require-reachable to pass, got: %v", err)
+	}
+	if !strings.Contains(out, "reachable") {
+		t.Fatalf("expected human output to mention reachability, got: %s", out)
 	}
 }

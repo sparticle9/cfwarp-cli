@@ -1,6 +1,11 @@
 name: Docker
 
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 concurrency:
@@ -9,11 +14,24 @@ concurrency:
 
 jobs:
   build-push:
-    name: Build & Push (alpine)
+    name: Build & Push (${{ matrix.flavor.name }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor:
+          - name: alpine
+            dockerfile: Dockerfile
+            tag_suffix: ""
+            latest_tag: latest
+          - name: debian
+            dockerfile: Dockerfile.debian
+            tag_suffix: -debian
+            latest_tag: latest-debian
 
     steps:
       - uses: actions/checkout@v6
@@ -33,15 +51,15 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha,prefix=sha-,format=short
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=ref,event=branch,suffix=${{ matrix.flavor.tag_suffix }}
+            type=ref,event=tag,suffix=${{ matrix.flavor.tag_suffix }}
+            type=sha,prefix=sha-,format=short,suffix=${{ matrix.flavor.tag_suffix }}
+            type=raw,value=${{ matrix.flavor.latest_tag }},enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
 
       - uses: docker/build-push-action@v7
         with:
           context: .
-          file: Dockerfile
+          file: ${{ matrix.flavor.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -51,5 +69,5 @@ jobs:
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
             SINGBOX_VERSION=1.13.5
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.flavor.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.flavor.name }}

@@ -45,7 +45,8 @@ RUN apk add --no-cache ca-certificates gcompat && \
     chown -R cfwarp:cfwarp /home/cfwarp
 
 ENV HOME=/home/cfwarp \
-    CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli
+    CFWARP_STATE_DIR=/home/cfwarp/.local/state/cfwarp-cli \
+    CFWARP_REGISTER_ON_START=1
 
 COPY --from=builder  /out/cfwarp-cli      /usr/local/bin/cfwarp-cli
 COPY --from=singbox  /out/sing-box        /usr/local/bin/sing-box
@@ -54,5 +55,7 @@ RUN chmod +x /entrypoint.sh
 
 VOLUME /home/cfwarp/.local/state/cfwarp-cli
 EXPOSE 1080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+  CMD ["cfwarp-cli", "status", "--state-dir", "/home/cfwarp/.local/state/cfwarp-cli", "--require-account", "--require-running", "--require-reachable"]
 USER cfwarp
 ENTRYPOINT ["/entrypoint.sh"]
