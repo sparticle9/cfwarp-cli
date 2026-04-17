@@ -42,7 +42,6 @@ See also:
   - uses the same published cfwarp image for both protocol lanes
   - binds SOCKS listeners only on `127.0.0.1`
   - uses per-service bind-mounted state directories so `settings.json` controls container behavior by default
-  - optional `canary` profile runs curl-based trace containers through each proxy
 - `deploy/dogfood.env.example`
   - compose env file template
 - `deploy/daemon-proxy.env.example`
@@ -59,7 +58,7 @@ See also:
   - removes the old periodic observer timer/service if it exists
 - `ansible/dogfood-status.yml`
   - on-demand inspection only
-  - shows compose state, `docker inspect`, `docker stats`, `cfwarp-cli status --json`, backend runtime files, backend stderr logs, sing-box service state, and sing-box journal output
+  - shows compose state, `docker inspect`, `docker stats`, `cfwarp-cli status --json`, `cfwarp-cli daemon ctl status`, backend runtime files, backend stderr logs, sing-box service state, and sing-box journal output
 
 ## Option A — deploy with Ansible
 
@@ -84,12 +83,6 @@ Then inspect the running stack:
 ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host>
 ```
 
-Or include live trace verification:
-
-```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
-  -e dogfood_verify_trace=true
-```
 
 ## Option B — deploy manually on the remote host
 
@@ -107,11 +100,6 @@ mkdir -p state/wireguard state/masque
 docker compose --env-file .env -f docker-compose.yml up -d
 ```
 
-To also run the canary containers:
-
-```bash
-docker compose --profile canary --env-file .env -f docker-compose.yml up -d
-```
 
 ## Verify from the remote host CLI
 
@@ -221,7 +209,7 @@ Change the proxy port in the env file:
 
 ### Container daemon example
 
-The compose file already contains optional `trace-wireguard` and `trace-masque` services under the `canary` profile. Those are simple stand-ins for another local daemon that routes through the proxy using `ALL_PROXY`.
+Run another local daemon in the same compose project or host network and point it at one of the localhost-bound SOCKS proxies using `ALL_PROXY` or its equivalent proxy settings.
 
 ## On-demand monitoring loop
 
@@ -230,8 +218,7 @@ There is no longer a background observer service.
 Use these commands when you want status:
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
-  -e dogfood_verify_trace=true
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host>
 
 docker inspect --format '{{json .State}}' cfwarp-warp
 docker inspect --format '{{json .State}}' cfwarp-masque

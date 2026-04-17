@@ -3,9 +3,7 @@
 # without opening dashboards.
 #
 # Usage:
-#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit <host>
-#   ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
-#     -e dogfood_verify_trace=true
+#   ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host>
 
 - name: Inspect cfwarp dogfood stack
   hosts: "{{ dogfood_hosts | default('warp') }}"
@@ -15,7 +13,6 @@
   vars:
     compose_dir: /opt/cfwarp-dogfood
     compose_file: docker-compose.yml
-    dogfood_verify_trace: false
     dogfood_backend_log_tail_lines: 40
     singbox_service_name: sing-box
     singbox_config_dir: /etc/sing-box
@@ -162,29 +159,6 @@
       loop: "{{ backend_stderr_logs.results }}"
       loop_control:
         label: "{{ item.item.name }}"
-
-    - name: Verify live Cloudflare trace through each localhost proxy when requested
-      ansible.builtin.shell: |
-        set -euo pipefail
-        curl -fsSL --max-time 20 --proxy "socks5h://127.0.0.1:{{ item.proxy_port }}" https://www.cloudflare.com/cdn-cgi/trace
-      args:
-        executable: /bin/bash
-      loop: "{{ proxy_checks }}"
-      loop_control:
-        label: "{{ item.name }}"
-      register: trace_results
-      changed_when: false
-      when: dogfood_verify_trace | bool
-
-    - name: Print trace output
-      ansible.builtin.debug:
-        msg: |
-          {{ item.item.name }} =>
-          {{ item.stdout_lines }}
-      loop: "{{ trace_results.results | default([]) }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-      when: dogfood_verify_trace | bool
 
     - name: Tail recent container logs for each proxy
       ansible.builtin.command:
