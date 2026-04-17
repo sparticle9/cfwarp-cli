@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/nexus/cfwarp-cli/internal/caps"
 	"github.com/nexus/cfwarp-cli/internal/state"
@@ -24,9 +25,16 @@ func probeTargetFromSettings(sett state.Settings) (caps.ProbeTarget, error) {
 	if err != nil {
 		return caps.ProbeTarget{}, err
 	}
+	host := access.ListenHost
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::", "[::]":
+		host = "::1"
+	}
 	return caps.ProbeTarget{
 		Type:     access.Type,
-		Address:  net.JoinHostPort(access.ListenHost, fmt.Sprintf("%d", access.ListenPort)),
+		Address:  net.JoinHostPort(host, fmt.Sprintf("%d", access.ListenPort)),
 		Username: access.Username,
 		Password: access.Password,
 	}, nil
