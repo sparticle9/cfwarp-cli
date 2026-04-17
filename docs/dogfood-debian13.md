@@ -4,7 +4,7 @@ This runbook prepares a **remote Debian 13 host with Docker** for side-by-side d
 
 - **stable path:** WireGuard/WARP SOCKS5 proxy
 - **experimental path:** native MASQUE SOCKS5 proxy
-- **consumer path:** another local daemon or container routing through one of those proxies
+- **consumer path:** local sing-box router forwarding selected traffic into one of those localhost proxies
 
 ## Readiness call
 
@@ -39,6 +39,7 @@ See also:
 
 - `deploy/docker-compose.dogfood.yml`
   - dual-proxy stack
+  - uses the same published cfwarp image for both protocol lanes
   - binds SOCKS listeners only on `127.0.0.1`
   - optional `canary` profile runs curl-based trace containers through each proxy
 - `deploy/dogfood.env.example`
@@ -50,25 +51,26 @@ See also:
 
 - `ansible/dogfood-deploy.yml`
   - copies compose files to remote host
-  - starts both proxies
-  - verifies `warp=on`
+  - starts both proxies on localhost-only nonstandard ports `16080` and `16081`
+  - can inject two local SOCKS outbounds into sing-box config when a stable config file path is available
+  - adds `geosite-google-deepmind` rule-set routing to the managed cfwarp outbound
+  - installs a lightweight observer timer for periodic probe logging
 - `ansible/dogfood-status.yml`
-  - shows compose state, `docker inspect`, `cfwarp-cli status --json`, optional live trace, and recent logs
+  - shows compose state, `docker inspect`, `docker stats`, `cfwarp-cli status --json`, sing-box service/journal state, and observer probe logs
 
 ## Option A — deploy with Ansible
 
 Copy `ansible/inventory.ini.example` to `ansible/inventory.ini`, add your remote host under `[warp]`, then run:
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit warp
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit <host>
 ```
 
 If you want to try the Debian image variant explicitly:
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit warp \
-  -e cfwarp_wireguard_image=ghcr.io/sparticle9/cfwarp-cli:latest-debian \
-  -e cfwarp_masque_image=ghcr.io/sparticle9/cfwarp-cli:latest-debian \
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit <host> \
+  -e cfwarp_image=ghcr.io/sparticle9/cfwarp-cli:latest-debian \
   -e cfwarp_wireguard_state_dir=/home/nonroot/.local/state/cfwarp-cli \
   -e cfwarp_masque_state_dir=/home/nonroot/.local/state/cfwarp-cli
 ```
@@ -76,13 +78,13 @@ ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit war
 Then inspect the running stack:
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit warp
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host>
 ```
 
 Or include live trace verification:
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit warp \
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
   -e dogfood_verify_trace=true
 ```
 
@@ -137,8 +139,8 @@ docker exec cfwarp-masque cfwarp-cli status --json \
 ### 3. Check actual egress through each localhost SOCKS listener
 
 ```bash
-curl -fsSL --proxy socks5h://127.0.0.1:18080 https://www.cloudflare.com/cdn-cgi/trace
-curl -fsSL --proxy socks5h://127.0.0.1:18081 https://www.cloudflare.com/cdn-cgi/trace
+curl -fsSL --proxy socks5h://127.0.0.1:16080 https://www.cloudflare.com/cdn-cgi/trace
+curl -fsSL --proxy socks5h://127.0.0.1:16081 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
 Expected output includes:
@@ -147,11 +149,29 @@ Expected output includes:
 warp=on
 ```
 
-## Route another local daemon through the proxy
+## Route selected traffic through local sing-box
+
+When sing-box is using a stable single-file config path, the deploy playbook can manage it with `become` and inject:
+
+- outbound `cfwarp-warp-local` => `socks5://127.0.0.1:16080`
+- outbound `cfwarp-masque-local` => `socks5://127.0.0.1:16081`
+- rule-set `geosite-google-deepmind`
+- route rule sending that rule-set to the managed target outbound
+
+Default managed target outbound:
+
+- `cfwarp-masque-local`
+
+You can override that at deploy time:
+
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit <host> \
+  -e singbox_rule_target_outbound=cfwarp-warp-local
+```
 
 ### Host daemon example
 
-Use `deploy/daemon-proxy.env.example` as the basis for an EnvironmentFile.
+If you want a daemon to bypass sing-box and point directly at one cfwarp proxy, use `deploy/daemon-proxy.env.example` as the basis for an EnvironmentFile.
 
 Example with systemd override:
 
@@ -177,8 +197,8 @@ sudo systemctl restart example-daemon.service
 
 Change the proxy port in the env file:
 
-- `18080` => stable WireGuard/WARP path
-- `18081` => experimental MASQUE path
+- `16080` => stable WireGuard/WARP path
+- `16081` => experimental MASQUE path
 
 ### Container daemon example
 
@@ -186,14 +206,36 @@ The compose file already contains optional `trace-wireguard` and `trace-masque` 
 
 ## Monitoring loop
 
+The deploy playbook installs:
+
+- `/usr/local/bin/cfwarp-dogfood-observer`
+- `cfwarp-dogfood-observer.service`
+- `cfwarp-dogfood-observer.timer`
+- log file at `/var/log/cfwarp-dogfood/probe.log`
+
+It records periodic probe results for:
+
+- Cloudflare trace through WARP port
+- Cloudflare trace through MASQUE port
+- Google `generate_204` through WARP port
+- Google `generate_204` through MASQUE port
+- current `sing-box` service state
+
 Useful commands during dogfooding:
 
 ```bash
 docker inspect --format '{{json .State}}' cfwarp-warp
 docker inspect --format '{{json .State}}' cfwarp-masque
 
+docker stats --no-stream cfwarp-warp cfwarp-masque
+
 docker logs --tail 100 cfwarp-warp
 docker logs --tail 100 cfwarp-masque
+
+systemctl status sing-box --no-pager
+journalctl -u sing-box -n 100 --no-pager
+
+tail -n 40 /var/log/cfwarp-dogfood/probe.log
 
 docker exec cfwarp-warp cfwarp-cli status --json --require-account --require-running --require-reachable \
   --state-dir /home/cfwarp/.local/state/cfwarp-cli

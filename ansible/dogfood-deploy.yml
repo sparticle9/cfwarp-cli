@@ -1,20 +1,21 @@
 ---
 # dogfood-deploy.yml — deploy stable WireGuard/WARP and experimental MASQUE
-# SOCKS proxies side-by-side on a remote Docker host.
+# SOCKS proxies side-by-side on a remote Docker host, then wire the local
+# sing-box router to use them for selected rule-sets.
 #
 # Usage:
-#   ansible-playbook -i inventory.ini ansible/dogfood-deploy.yml --limit warp
-#   ansible-playbook -i inventory.ini ansible/dogfood-deploy.yml --limit warp \
-#     -e cfwarp_wireguard_image=ghcr.io/sparticle9/cfwarp-cli:latest-debian \
-#     -e cfwarp_masque_image=ghcr.io/sparticle9/cfwarp-cli:latest
+#   ansible-playbook -i inventory.ini ansible/dogfood-deploy.yml --limit <host>
 #
 # Notes:
-#   - WireGuard is the stable dogfood path.
-#   - MASQUE is deployed in parallel for verification, but remains experimental.
 #   - Both proxies bind only to 127.0.0.1 on the remote host.
+#   - Both protocol lanes use the same published cfwarp image; behavior differs
+#     only by runtime env/config.
+#   - Default local ports are 16080 (WireGuard) and 16081 (MASQUE).
+#   - Default router rule sends geosite-google-deepmind to the MASQUE outbound,
+#     keeping the blast radius narrow while exercising the experimental lane.
 
-- name: Deploy cfwarp dogfood stack
-  hosts: warp
+- name: Deploy cfwarp dogfood stack and sing-box routing
+  hosts: "{{ dogfood_hosts | default('warp') }}"
   become: true
   gather_facts: false
 
@@ -22,15 +23,44 @@
     compose_dir: /opt/cfwarp-dogfood
     compose_file: docker-compose.yml
     env_file: .env
-    cfwarp_wireguard_image: ghcr.io/sparticle9/cfwarp-cli:latest
-    cfwarp_masque_image: ghcr.io/sparticle9/cfwarp-cli:latest
-    cfwarp_wireguard_port: 18080
-    cfwarp_masque_port: 18081
+    cfwarp_image: ghcr.io/sparticle9/cfwarp-cli:latest
+    cfwarp_wireguard_port: 16080
+    cfwarp_masque_port: 16081
     cfwarp_wireguard_state_dir: /home/cfwarp/.local/state/cfwarp-cli
     cfwarp_masque_state_dir: /home/cfwarp/.local/state/cfwarp-cli
     cfwarp_log_level: info
     trace_interval_seconds: 60
     dogfood_enable_canary: false
+    dogfood_strict_proxy_validation: true
+    cfwarp_masque_sni: ""
+    cfwarp_masque_use_ipv6: ""
+    cfwarp_masque_connect_port: 443
+    cfwarp_masque_mtu: 1280
+    cfwarp_masque_initial_packet_size: 1242
+    cfwarp_masque_keepalive_seconds: 25
+    cfwarp_masque_reconnect_delay_millis: 1200
+
+    singbox_manage_router: true
+    singbox_config_dir: /etc/sing-box
+    singbox_outbounds_path: /etc/sing-box/outbounds.json
+    singbox_routes_path: /etc/sing-box/routes.json
+    singbox_service_name: sing-box
+    singbox_managed_dir: /usr/local/lib/cfwarp-dogfood
+    singbox_merge_script_path: /usr/local/lib/cfwarp-dogfood/merge_singbox_fragments.py
+    singbox_outbounds_candidate: /usr/local/lib/cfwarp-dogfood/outbounds.json.candidate
+    singbox_routes_candidate: /usr/local/lib/cfwarp-dogfood/routes.json.candidate
+    singbox_validation_dir: /usr/local/lib/cfwarp-dogfood/validation-dir
+    singbox_warp_outbound_tag: cfwarp-warp-local
+    singbox_masque_outbound_tag: cfwarp-masque-local
+    singbox_rule_set_tag: geosite-google-deepmind
+    singbox_rule_set_url: https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google-deepmind.srs
+    singbox_rule_target_outbound: cfwarp-masque-local
+
+    dogfood_observer_log_dir: /var/log/cfwarp-dogfood
+    dogfood_observer_script_path: /usr/local/bin/cfwarp-dogfood-observer
+    dogfood_observer_interval: 2min
+    dogfood_probe_timeout_seconds: 20
+
     proxy_checks:
       - name: wireguard
         container_name: cfwarp-warp
@@ -45,12 +75,40 @@
         probe_attempts: 8
         probe_delay_seconds: 8
 
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: restart sing-box
+      ansible.builtin.systemd_service:
+        name: "{{ singbox_service_name }}"
+        state: restarted
+        enabled: true
+
+    - name: restart observer timer
+      ansible.builtin.systemd_service:
+        name: cfwarp-dogfood-observer.timer
+        state: restarted
+        enabled: true
+
   tasks:
     - name: Ensure compose directory exists
       ansible.builtin.file:
         path: "{{ compose_dir }}"
         state: directory
         mode: "0750"
+
+    - name: Ensure managed helper directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ singbox_managed_dir }}", mode: "0755" }
+        - { path: "{{ dogfood_observer_log_dir }}", mode: "0755" }
 
     - name: Copy dogfood compose file
       ansible.builtin.copy:
@@ -63,13 +121,19 @@
         dest: "{{ compose_dir }}/{{ env_file }}"
         mode: "0640"
         content: |
-          CFWARP_WIREGUARD_IMAGE={{ cfwarp_wireguard_image }}
-          CFWARP_MASQUE_IMAGE={{ cfwarp_masque_image }}
+          CFWARP_IMAGE={{ cfwarp_image }}
           CFWARP_WIREGUARD_PORT={{ cfwarp_wireguard_port }}
           CFWARP_MASQUE_PORT={{ cfwarp_masque_port }}
           CFWARP_WIREGUARD_STATE_DIR={{ cfwarp_wireguard_state_dir }}
           CFWARP_MASQUE_STATE_DIR={{ cfwarp_masque_state_dir }}
           CFWARP_LOG_LEVEL={{ cfwarp_log_level }}
+          CFWARP_MASQUE_SNI={{ cfwarp_masque_sni }}
+          CFWARP_MASQUE_USE_IPV6={{ cfwarp_masque_use_ipv6 }}
+          CFWARP_MASQUE_CONNECT_PORT={{ cfwarp_masque_connect_port }}
+          CFWARP_MASQUE_MTU={{ cfwarp_masque_mtu }}
+          CFWARP_MASQUE_INITIAL_PACKET_SIZE={{ cfwarp_masque_initial_packet_size }}
+          CFWARP_MASQUE_KEEPALIVE_SECONDS={{ cfwarp_masque_keepalive_seconds }}
+          CFWARP_MASQUE_RECONNECT_DELAY_MILLIS={{ cfwarp_masque_reconnect_delay_millis }}
           TRACE_INTERVAL_SECONDS={{ trace_interval_seconds }}
 
     - name: Pull dogfood images
@@ -79,8 +143,7 @@
           - pull
           - "{{ item }}"
       loop:
-        - "{{ cfwarp_wireguard_image }}"
-        - "{{ cfwarp_masque_image }}"
+        - "{{ cfwarp_image }}"
       changed_when: false
 
     - name: Start dogfood compose stack
@@ -132,7 +195,27 @@
       loop: "{{ proxy_checks }}"
       loop_control:
         label: "{{ item.name }}"
+      register: proxy_probe_results
       changed_when: false
+      failed_when: false
+
+    - name: Show proxy probe summary
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} => rc={{ item.rc }}
+          {{ item.stdout | default('') }}
+          {{ item.stderr | default('') }}
+      loop: "{{ proxy_probe_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Enforce successful proxy validation when strict mode is enabled
+      ansible.builtin.assert:
+        that:
+          - (proxy_probe_results.results | selectattr('rc', 'equalto', 0) | list | length) == (proxy_checks | length)
+        fail_msg: "one or more cfwarp proxy probes failed; inspect docker logs and ansible/dogfood-status.yml"
+        success_msg: all cfwarp proxy probes returned warp=on
+      when: dogfood_strict_proxy_validation | bool
 
     - name: Capture runtime status JSON from each proxy container
       ansible.builtin.command:
@@ -159,3 +242,179 @@
       loop: "{{ proxy_status_json.results }}"
       loop_control:
         label: "{{ item.item.name }}"
+
+    - name: Check sing-box fragment files exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ singbox_outbounds_path }}"
+        - "{{ singbox_routes_path }}"
+      register: singbox_fragment_stats
+      when: singbox_manage_router | bool
+
+    - name: Fail when sing-box fragment files are missing
+      ansible.builtin.assert:
+        that:
+          - (singbox_fragment_stats.results | map(attribute='stat.exists') | min)
+        fail_msg: >-
+          sing-box fragment files are missing under {{ singbox_config_dir }}; refusing automatic router mutation.
+        success_msg: sing-box fragment files found
+      when: singbox_manage_router | bool
+
+    - name: Install sing-box merge helper
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/merge_singbox_fragments.py"
+        dest: "{{ singbox_merge_script_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+      when: singbox_manage_router | bool
+
+    - name: Render candidate sing-box outbounds/routes with cfwarp entries and DeepMind rule-set
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ singbox_merge_script_path }}"
+          - --outbounds
+          - "{{ singbox_outbounds_path }}"
+          - --routes
+          - "{{ singbox_routes_path }}"
+          - --warp-port
+          - "{{ cfwarp_wireguard_port | string }}"
+          - --masque-port
+          - "{{ cfwarp_masque_port | string }}"
+          - --warp-tag
+          - "{{ singbox_warp_outbound_tag }}"
+          - --masque-tag
+          - "{{ singbox_masque_outbound_tag }}"
+          - --rule-set-tag
+          - "{{ singbox_rule_set_tag }}"
+          - --rule-set-url
+          - "{{ singbox_rule_set_url }}"
+          - --rule-target-outbound
+          - "{{ singbox_rule_target_outbound }}"
+          - --outbounds-output
+          - "{{ singbox_outbounds_candidate }}"
+          - --routes-output
+          - "{{ singbox_routes_candidate }}"
+      changed_when: false
+      when: singbox_manage_router | bool
+
+    - name: Prepare temporary sing-box validation directory
+      ansible.builtin.file:
+        path: "{{ singbox_validation_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: singbox_manage_router | bool
+
+    - name: Copy sing-box directory into validation directory
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf {{ singbox_validation_dir | quote }}/*
+        cp -a {{ singbox_config_dir | quote }}/. {{ singbox_validation_dir | quote }}/
+        cp {{ singbox_outbounds_candidate | quote }} {{ singbox_validation_dir | quote }}/outbounds.json
+        cp {{ singbox_routes_candidate | quote }} {{ singbox_validation_dir | quote }}/routes.json
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: singbox_manage_router | bool
+
+    - name: Validate merged sing-box config directory
+      ansible.builtin.command:
+        argv:
+          - sing-box
+          - check
+          - -C
+          - "{{ singbox_validation_dir }}"
+      changed_when: false
+      when: singbox_manage_router | bool
+
+    - name: Install managed sing-box outbounds fragment
+      ansible.builtin.copy:
+        src: "{{ singbox_outbounds_candidate }}"
+        dest: "{{ singbox_outbounds_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: restart sing-box
+      when: singbox_manage_router | bool
+
+    - name: Install managed sing-box routes fragment
+      ansible.builtin.copy:
+        src: "{{ singbox_routes_candidate }}"
+        dest: "{{ singbox_routes_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: restart sing-box
+      when: singbox_manage_router | bool
+
+    - name: Install observer probe script
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/cfwarp-dogfood-observer.sh.j2"
+        dest: "{{ dogfood_observer_script_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install observer systemd service
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/cfwarp-dogfood-observer.service.j2"
+        dest: /etc/systemd/system/cfwarp-dogfood-observer.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart observer timer
+
+    - name: Install observer systemd timer
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/cfwarp-dogfood-observer.timer.j2"
+        dest: /etc/systemd/system/cfwarp-dogfood-observer.timer
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart observer timer
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ensure sing-box service is enabled and running
+      ansible.builtin.systemd_service:
+        name: "{{ singbox_service_name }}"
+        state: started
+        enabled: true
+
+    - name: Ensure observer timer is enabled and running
+      ansible.builtin.systemd_service:
+        name: cfwarp-dogfood-observer.timer
+        state: started
+        enabled: true
+
+    - name: Run observer once immediately
+      ansible.builtin.command:
+        argv:
+          - "{{ dogfood_observer_script_path }}"
+      changed_when: false
+
+    - name: Show sing-box service status
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ singbox_service_name }}"
+      register: singbox_service_status
+      changed_when: false
+
+    - name: Print sing-box service status
+      ansible.builtin.debug:
+        msg: "{{ singbox_service_name }} status => {{ singbox_service_status.stdout }}"

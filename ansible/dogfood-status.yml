@@ -1,13 +1,14 @@
 ---
-# dogfood-status.yml — inspect remote dogfood stack without opening dashboards.
+# dogfood-status.yml — inspect remote dogfood stack and related sing-box router
+# without opening dashboards.
 #
 # Usage:
-#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit warp
-#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit warp \
+#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit <host>
+#   ansible-playbook -i inventory.ini ansible/dogfood-status.yml --limit <host> \
 #     -e dogfood_verify_trace=true
 
 - name: Inspect cfwarp dogfood stack
-  hosts: warp
+  hosts: "{{ dogfood_hosts | default('warp') }}"
   become: true
   gather_facts: false
 
@@ -15,8 +16,13 @@
     compose_dir: /opt/cfwarp-dogfood
     compose_file: docker-compose.yml
     dogfood_verify_trace: false
-    cfwarp_wireguard_port: 18080
-    cfwarp_masque_port: 18081
+    singbox_service_name: sing-box
+    singbox_config_dir: /etc/sing-box
+    singbox_outbounds_path: /etc/sing-box/outbounds.json
+    singbox_routes_path: /etc/sing-box/routes.json
+    dogfood_observer_log_dir: /var/log/cfwarp-dogfood
+    cfwarp_wireguard_port: 16080
+    cfwarp_masque_port: 16081
     cfwarp_wireguard_state_dir: /home/cfwarp/.local/state/cfwarp-cli
     cfwarp_masque_state_dir: /home/cfwarp/.local/state/cfwarp-cli
     proxy_checks:
@@ -69,6 +75,24 @@
       loop: "{{ inspect_state.results }}"
       loop_control:
         label: "{{ item.item.name }}"
+
+    - name: Show docker stats snapshot for proxy containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - stats
+          - --no-stream
+          - --format
+          - "table {{ '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}' }}"
+          - cfwarp-warp
+          - cfwarp-masque
+      register: docker_stats
+      changed_when: false
+      failed_when: false
+
+    - name: Print docker stats snapshot
+      ansible.builtin.debug:
+        msg: "{{ docker_stats.stdout_lines | default([]) }}"
 
     - name: Capture cfwarp-cli status JSON inside each container
       ansible.builtin.command:
@@ -142,3 +166,97 @@
       loop: "{{ recent_logs.results }}"
       loop_control:
         label: "{{ item.item.name }}"
+
+    - name: Show sing-box service state
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ singbox_service_name }}"
+      register: singbox_active
+      changed_when: false
+      failed_when: false
+
+    - name: Print sing-box service state
+      ansible.builtin.debug:
+        msg: "{{ singbox_service_name }} => {{ singbox_active.stdout | default('unknown') }}"
+
+    - name: Validate sing-box config syntax
+      ansible.builtin.command:
+        argv:
+          - sing-box
+          - check
+          - -C
+          - "{{ singbox_config_dir }}"
+      register: singbox_check
+      changed_when: false
+      failed_when: false
+
+    - name: Show managed sing-box outbounds fragment
+      ansible.builtin.command:
+        argv:
+          - sed
+          - -n
+          - 1,240p
+          - "{{ singbox_outbounds_path }}"
+      register: singbox_outbounds
+      changed_when: false
+      failed_when: false
+
+    - name: Print sing-box outbounds fragment
+      ansible.builtin.debug:
+        msg: "{{ singbox_outbounds.stdout_lines | default([]) }}"
+
+    - name: Show managed sing-box routes fragment
+      ansible.builtin.command:
+        argv:
+          - sed
+          - -n
+          - 1,240p
+          - "{{ singbox_routes_path }}"
+      register: singbox_routes
+      changed_when: false
+      failed_when: false
+
+    - name: Print sing-box routes fragment
+      ansible.builtin.debug:
+        msg: "{{ singbox_routes.stdout_lines | default([]) }}"
+
+    - name: Print sing-box config check output
+      ansible.builtin.debug:
+        msg: |
+          rc={{ singbox_check.rc }}
+          stdout={{ singbox_check.stdout | default('') }}
+          stderr={{ singbox_check.stderr | default('') }}
+
+    - name: Tail sing-box journal
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - -u
+          - "{{ singbox_service_name }}"
+          - -n
+          - "80"
+          - --no-pager
+      register: singbox_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Print sing-box journal
+      ansible.builtin.debug:
+        msg: "{{ singbox_journal.stdout_lines | default([]) }}"
+
+    - name: Tail observer probe log
+      ansible.builtin.command:
+        argv:
+          - tail
+          - -n
+          - "40"
+          - "{{ dogfood_observer_log_dir }}/probe.log"
+      register: observer_log
+      changed_when: false
+      failed_when: false
+
+    - name: Print observer probe log tail
+      ansible.builtin.debug:
+        msg: "{{ observer_log.stdout_lines | default([]) }}"
