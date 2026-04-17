@@ -54,7 +54,13 @@ var registrationShowCmd = &cobra.Command{
 		fmt.Fprintf(c.OutOrStdout(), "source:     %s\n", acc.Source)
 		fmt.Fprintf(c.OutOrStdout(), "created_at: %s\n", acc.CreatedAt.Format(time.RFC3339))
 		fmt.Fprintf(c.OutOrStdout(), "wireguard:  %t\n", acc.WireGuard != nil)
+		fmt.Fprintf(c.OutOrStdout(), "wireguard_ipv4: %s\n", acc.WARPIPV4)
+		fmt.Fprintf(c.OutOrStdout(), "wireguard_ipv6: %s\n", acc.WARPIPV6)
 		fmt.Fprintf(c.OutOrStdout(), "masque:     %t\n", acc.Masque != nil)
+		if acc.Masque != nil {
+			fmt.Fprintf(c.OutOrStdout(), "masque_ipv4: %s\n", acc.Masque.IPv4)
+			fmt.Fprintf(c.OutOrStdout(), "masque_ipv6: %s\n", acc.Masque.IPv6)
+		}
 		return nil
 	},
 }

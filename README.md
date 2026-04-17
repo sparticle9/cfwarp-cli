@@ -76,6 +76,7 @@ This matters because the fastest raw tunnel is not always the best fit for real 
 - `docs/benchmark-mechanism.md` — benchmark harness design, phases, and result semantics
 - `docs/benchmark-report-case.md` — interpretation of the latest benchmark set for the intended workload mix
 - `docs/dogfood-debian13.md` — Debian 13 dogfood runbook for dual localhost-bound WireGuard and MASQUE proxies
+- `docs/warp-rotation-unlock.md` — built-in WARP address rotation and unlock-check workflow
 - `docs/status/2026-04-native-masque-status.md` — public status memo for native MASQUE support
 - `docs/specs/001-minimal-wireguard-proxy/requirements.md` — MVP requirements
 - `docs/specs/001-minimal-wireguard-proxy/design.md` — MVP design and Docker deployment
@@ -87,6 +88,7 @@ Implemented today:
 
 - `cfwarp-cli` Docker-oriented WireGuard backend flow
 - experimental native MASQUE HTTP/SOCKS runtime path
+- built-in WARP address inspection, rotation, and lightweight unlock checks
 - multi-arch GHCR container publishing workflow for Alpine and Debian variants
 - published-image benchmark harness
 - comparison against original `MicroWARP`

@@ -57,15 +57,11 @@ func ProbeTrace(ctx context.Context, proxyMode, proxyAddr, username, password st
 // ProbeTraceURL is like ProbeTrace but fetches a custom URL.
 // Used in tests to avoid real network calls.
 func ProbeTraceURL(ctx context.Context, proxyMode, proxyAddr, username, password, targetURL string) (TraceResult, error) {
-	transport, err := buildTransport(proxyMode, proxyAddr, username, password)
+	client, err := NewHTTPClient(proxyMode, proxyAddr, username, password, traceProbeTimeout)
 	if err != nil {
-		return TraceResult{}, fmt.Errorf("build proxy transport: %w", err)
+		return TraceResult{}, fmt.Errorf("build proxy client: %w", err)
 	}
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   traceProbeTimeout,
-	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
@@ -87,6 +83,18 @@ func ProbeTraceURL(ctx context.Context, proxyMode, proxyAddr, username, password
 		WARPOn: fields["warp"] == "on",
 		Fields: fields,
 	}, nil
+}
+
+// NewHTTPClient creates an HTTP client that routes traffic through the proxy.
+func NewHTTPClient(mode, addr, username, password string, timeout time.Duration) (*http.Client, error) {
+	transport, err := buildTransport(mode, addr, username, password)
+	if err != nil {
+		return nil, err
+	}
+	if timeout <= 0 {
+		timeout = traceProbeTimeout
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}, nil
 }
 
 // buildTransport creates an *http.Transport that routes through the proxy.
