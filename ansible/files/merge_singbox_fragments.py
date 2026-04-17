@@ -72,6 +72,12 @@ def merge_outbounds(data, warp_port, masque_port, warp_tag, masque_tag):
     return data
 
 
+def is_non_final_route_action(rule):
+    if not isinstance(rule, dict):
+        return False
+    return rule.get("action") in {"sniff", "resolve", "route-options"}
+
+
 def merge_routes(data, rule_set_tag, rule_set_url, rule_target_outbound):
     data = ensure_dict(data, "routes document")
     route = ensure_dict(data.get("route"), "route")
@@ -107,8 +113,13 @@ def merge_routes(data, rule_set_tag, rule_set_url, rule_target_outbound):
         "outbound": rule_target_outbound,
     }
 
+    prefix = []
+    suffix = filtered_rules
+    while suffix and is_non_final_route_action(suffix[0]):
+        prefix.append(suffix.pop(0))
+
     route["rule_set"] = rule_sets
-    route["rules"] = [managed_rule] + filtered_rules
+    route["rules"] = prefix + [managed_rule] + suffix
     data["route"] = route
     return data
 
