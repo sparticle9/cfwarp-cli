@@ -8,7 +8,7 @@ import (
 
 const (
 	CurrentAccountSchemaVersion  = 2
-	CurrentSettingsSchemaVersion = 2
+	CurrentSettingsSchemaVersion = 3
 	CurrentRuntimeSchemaVersion  = 3
 
 	RuntimeFamilyLegacy = "legacy"
@@ -196,12 +196,14 @@ type CapsOptions struct {
 
 // RotationOptions controls how the daemon remediates failed capability probes.
 type RotationOptions struct {
-	Enabled                bool `json:"enabled,omitempty"`
-	MaxAttemptsPerIncident int  `json:"max_attempts_per_incident,omitempty"`
-	SettleTimeSeconds      int  `json:"settle_time_seconds,omitempty"`
-	CooldownSeconds        int  `json:"cooldown_seconds,omitempty"`
-	RestoreLastGood        bool `json:"restore_last_good,omitempty"`
-	EnrollMasque           bool `json:"enroll_masque,omitempty"`
+	Enabled                bool   `json:"enabled,omitempty"`
+	MaxAttemptsPerIncident int    `json:"max_attempts_per_incident,omitempty"`
+	SettleTimeSeconds      int    `json:"settle_time_seconds,omitempty"`
+	CooldownSeconds        int    `json:"cooldown_seconds,omitempty"`
+	RestoreLastGood        bool   `json:"restore_last_good,omitempty"`
+	EnrollMasque           bool   `json:"enroll_masque,omitempty"`
+	Distinctness           string `json:"distinctness,omitempty"`
+	HistorySize            int    `json:"history_size,omitempty"`
 }
 
 // DaemonOptions configures the long-running manager process.
@@ -325,6 +327,23 @@ func (s *Settings) Normalize() {
 			}
 		}
 	}
+	if s.Rotation != nil {
+		s.Rotation.Distinctness = strings.ToLower(strings.TrimSpace(s.Rotation.Distinctness))
+		if s.Rotation.Enabled {
+			if s.Rotation.MaxAttemptsPerIncident == 0 {
+				s.Rotation.MaxAttemptsPerIncident = 3
+			}
+			if s.Rotation.SettleTimeSeconds == 0 {
+				s.Rotation.SettleTimeSeconds = 12
+			}
+			if s.Rotation.Distinctness == "" {
+				s.Rotation.Distinctness = RotationDistinctnessEither
+			}
+			if s.Rotation.HistorySize == 0 {
+				s.Rotation.HistorySize = DefaultRotationHistorySize
+			}
+		}
+	}
 	for i := range s.Access {
 		s.Access[i].Type = strings.ToLower(strings.TrimSpace(s.Access[i].Type))
 		if s.Access[i].Type != ModeTUN && s.Access[i].ListenHost == "" {
@@ -382,7 +401,7 @@ func accessMatchesLegacy(s Settings) bool {
 }
 
 func zeroRotation(o *RotationOptions) bool {
-	return o == nil || (!o.Enabled && o.MaxAttemptsPerIncident == 0 && o.SettleTimeSeconds == 0 && o.CooldownSeconds == 0 && !o.RestoreLastGood && !o.EnrollMasque)
+	return o == nil || (!o.Enabled && o.MaxAttemptsPerIncident == 0 && o.SettleTimeSeconds == 0 && o.CooldownSeconds == 0 && !o.RestoreLastGood && !o.EnrollMasque && o.Distinctness == "" && o.HistorySize == 0)
 }
 
 func zeroDaemon(o *DaemonOptions) bool {

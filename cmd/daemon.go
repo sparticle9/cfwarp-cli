@@ -34,13 +34,15 @@ type daemonCtlResponse struct {
 }
 
 type daemonStatus struct {
-	RuntimeFamily string             `json:"runtime_family,omitempty"`
-	Transport     string             `json:"transport,omitempty"`
-	Access        []state.AccessConfig `json:"access,omitempty"`
-	LastResults   []capspkg.Result   `json:"last_results,omitempty"`
-	LastCheckedAt string             `json:"last_checked_at,omitempty"`
-	CooldownUntil string             `json:"cooldown_until,omitempty"`
-	LastError     string             `json:"last_error,omitempty"`
+	RuntimeFamily        string                 `json:"runtime_family,omitempty"`
+	Transport            string                 `json:"transport,omitempty"`
+	Access               []state.AccessConfig   `json:"access,omitempty"`
+	LastResults          []capspkg.Result       `json:"last_results,omitempty"`
+	LastCheckedAt        string                 `json:"last_checked_at,omitempty"`
+	CooldownUntil        string                 `json:"cooldown_until,omitempty"`
+	LastError            string                 `json:"last_error,omitempty"`
+	LastRotation         *state.RotationNovelty `json:"last_rotation,omitempty"`
+	RotationHistoryCount int                    `json:"rotation_history_count,omitempty"`
 }
 
 type daemonManager struct {
@@ -48,12 +50,14 @@ type daemonManager struct {
 	dirs       state.Dirs
 	socketPath string
 
-	mu           sync.Mutex
-	settings     state.Settings
-	lastResults  []capspkg.Result
-	lastChecked  time.Time
-	cooldownUntil time.Time
-	lastError    string
+	mu                   sync.Mutex
+	settings             state.Settings
+	lastResults          []capspkg.Result
+	lastChecked          time.Time
+	cooldownUntil        time.Time
+	lastError            string
+	lastRotation         *state.RotationNovelty
+	rotationHistoryCount int
 }
 
 func newDaemonManager(cmd *cobra.Command, dirs state.Dirs, sett state.Settings) *daemonManager {
@@ -68,11 +72,16 @@ func (m *daemonManager) snapshot() daemonStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	status := daemonStatus{
-		RuntimeFamily: m.settings.RuntimeFamily,
-		Transport:     m.settings.Transport,
-		Access:        append([]state.AccessConfig(nil), m.settings.Access...),
-		LastResults:   append([]capspkg.Result(nil), m.lastResults...),
-		LastError:     m.lastError,
+		RuntimeFamily:        m.settings.RuntimeFamily,
+		Transport:            m.settings.Transport,
+		Access:               append([]state.AccessConfig(nil), m.settings.Access...),
+		LastResults:          append([]capspkg.Result(nil), m.lastResults...),
+		LastError:            m.lastError,
+		RotationHistoryCount: m.rotationHistoryCount,
+	}
+	if m.lastRotation != nil {
+		rotation := *m.lastRotation
+		status.LastRotation = &rotation
 	}
 	if !m.lastChecked.IsZero() {
 		status.LastCheckedAt = m.lastChecked.Format(time.RFC3339)
@@ -105,6 +114,19 @@ func (m *daemonManager) setError(err error) {
 		return
 	}
 	m.lastError = err.Error()
+}
+
+func (m *daemonManager) setRotationStatus(status state.RotationNovelty) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := status
+	m.lastRotation = &copied
+}
+
+func (m *daemonManager) setRotationHistoryCount(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rotationHistoryCount = n
 }
 
 func (m *daemonManager) inCooldown() bool {
@@ -185,6 +207,10 @@ func (m *daemonManager) markLastGood() {
 	if err != nil {
 		return
 	}
+	if status, err := ensureRotationAccount(m.dirs, acc, m.settings); err == nil {
+		m.setRotationStatus(status)
+		m.setRotationHistoryCount(status.HistoryEntries)
+	}
 	_ = state.SaveLastGoodAccount(m.dirs, acc)
 }
 
@@ -223,6 +249,20 @@ func (m *daemonManager) rotateOnce(ctx context.Context) error {
 	}
 	if err := registerAccount(m.cmd, m.dirs, true, masqueEnroll); err != nil {
 		return err
+	}
+	acc, err := state.LoadAccount(m.dirs)
+	if err != nil {
+		return err
+	}
+	status, err := rememberRotationAccount(m.dirs, acc, sett, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	m.setRotationStatus(status)
+	m.setRotationHistoryCount(status.HistoryEntries)
+	fmt.Fprintf(m.cmd.OutOrStdout(), "%s\n", formatRotationNovelty(status))
+	if !status.Qualifies {
+		return fmt.Errorf("rotation did not produce a new address assignment under distinctness=%s", status.Distinctness)
 	}
 	_, err = startBackendRuntime(ctx, m.cmd.OutOrStdout(), m.dirs, sett, false)
 	return err
@@ -459,6 +499,10 @@ var daemonRunCmd = &cobra.Command{
 		defer cancel()
 		if err := mgr.ensureBackendRunning(ctx); err != nil {
 			return err
+		}
+		if status, err := rememberCurrentRotationAccount(dirs, sett); err == nil && status != nil {
+			mgr.setRotationStatus(*status)
+			mgr.setRotationHistoryCount(status.HistoryEntries)
 		}
 		if err := mgr.scheduledCheck(ctx); err != nil {
 			return err

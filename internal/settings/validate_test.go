@@ -139,6 +139,51 @@ func TestValidate_InvalidEndpointOverride(t *testing.T) {
 	}
 }
 
+func TestValidate_RotationDistinctnessValid(t *testing.T) {
+	s := validSettings()
+	s.Rotation = &state.RotationOptions{
+		Enabled:                true,
+		MaxAttemptsPerIncident: 2,
+		SettleTimeSeconds:      10,
+		CooldownSeconds:        0,
+		Distinctness:           state.RotationDistinctnessIPv6,
+		HistorySize:            64,
+	}
+	if err := settings.Validate(s); err != nil {
+		t.Errorf("expected rotation distinctness to be valid, got: %v", err)
+	}
+}
+
+func TestValidate_RotationDistinctnessInvalid(t *testing.T) {
+	s := validSettings()
+	s.Rotation = &state.RotationOptions{
+		Enabled:                true,
+		MaxAttemptsPerIncident: 2,
+		SettleTimeSeconds:      10,
+		Distinctness:           "sometimes",
+		HistorySize:            64,
+	}
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "rotation.distinctness") {
+		t.Errorf("expected rotation.distinctness error, got: %v", err)
+	}
+}
+
+func TestValidate_RotationHistorySizeInvalid(t *testing.T) {
+	s := validSettings()
+	s.Rotation = &state.RotationOptions{
+		Enabled:                true,
+		MaxAttemptsPerIncident: 2,
+		SettleTimeSeconds:      10,
+		Distinctness:           state.RotationDistinctnessEither,
+		HistorySize:            -1,
+	}
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "rotation.history_size") {
+		t.Errorf("expected rotation.history_size error, got: %v", err)
+	}
+}
+
 // --- ValidateEndpoint ---
 
 func TestValidateEndpoint_Valid(t *testing.T) {

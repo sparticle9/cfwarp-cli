@@ -328,6 +328,14 @@ func applyRotationEnv(s *state.Settings) {
 			ensureRotation().EnrollMasque = parsed
 		}
 	}
+	if v := os.Getenv("CFWARP_ROTATION_DISTINCTNESS"); v != "" {
+		ensureRotation().Distinctness = strings.ToLower(strings.TrimSpace(v))
+	}
+	if v := os.Getenv("CFWARP_ROTATION_HISTORY_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			ensureRotation().HistorySize = n
+		}
+	}
 }
 
 func applyDaemonEnv(s *state.Settings) {

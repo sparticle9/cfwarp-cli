@@ -80,6 +80,9 @@ func (d Dirs) SettingsFile() string { return filepath.Join(d.Config, "settings.j
 // LastGoodAccountFile returns the path to the daemon's last-known-good account snapshot.
 func (d Dirs) LastGoodAccountFile() string { return filepath.Join(d.Config, "last-good-account.json") }
 
+// RotationHistoryFile returns the path to the hashed rotation memory store.
+func (d Dirs) RotationHistoryFile() string { return filepath.Join(d.Config, "rotation-history.json") }
+
 // RuntimeFile returns the path to runtime.json inside the runtime root.
 func (d Dirs) RuntimeFile() string { return filepath.Join(d.Runtime, "runtime.json") }
 

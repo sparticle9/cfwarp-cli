@@ -52,6 +52,11 @@ results is found or the attempt budget is exhausted.`,
 		if previousAccountErr != nil && !errors.Is(previousAccountErr, state.ErrNotFound) {
 			return fmt.Errorf("load current account: %w", previousAccountErr)
 		}
+		if hadPreviousAccount {
+			if status, err := ensureRotationAccount(dirs, previousAccount, sett); err == nil {
+				fmt.Fprintf(c.OutOrStdout(), "Current %s\n", formatRotationNovelty(status))
+			}
+		}
 
 		wasRunning := false
 		if rt, err := state.LoadRuntime(dirs); err == nil {
@@ -75,11 +80,26 @@ results is found or the attempt budget is exhausted.`,
 			}
 
 			acc, err := state.LoadAccount(dirs)
-			if err == nil {
-				fmt.Fprintf(c.OutOrStdout(), "wireguard_ipv4=%s wireguard_ipv6=%s\n", acc.WARPIPV4, acc.WARPIPV6)
-				if acc.Masque != nil {
-					fmt.Fprintf(c.OutOrStdout(), "masque_ipv4=%s masque_ipv6=%s\n", acc.Masque.IPv4, acc.Masque.IPv6)
-				}
+			if err != nil {
+				lastErr = fmt.Errorf("load rotated account: %w", err)
+				fmt.Fprintf(c.ErrOrStderr(), "%v\n", lastErr)
+				continue
+			}
+			fmt.Fprintf(c.OutOrStdout(), "wireguard_ipv4=%s wireguard_ipv6=%s\n", acc.WARPIPV4, acc.WARPIPV6)
+			if acc.Masque != nil {
+				fmt.Fprintf(c.OutOrStdout(), "masque_ipv4=%s masque_ipv6=%s\n", acc.Masque.IPv4, acc.Masque.IPv6)
+			}
+			status, statusErr := rememberRotationAccount(dirs, acc, sett, time.Now().UTC())
+			if statusErr != nil {
+				lastErr = statusErr
+				fmt.Fprintf(c.ErrOrStderr(), "rotation memory update failed: %v\n", statusErr)
+				continue
+			}
+			fmt.Fprintf(c.OutOrStdout(), "%s\n", formatRotationNovelty(status))
+			if !status.Qualifies {
+				lastErr = fmt.Errorf("rotation did not produce a new address assignment under distinctness=%s", status.Distinctness)
+				fmt.Fprintf(c.ErrOrStderr(), "%v\n", lastErr)
+				continue
 			}
 
 			shouldStart := keepRunning || useTemporaryBackend

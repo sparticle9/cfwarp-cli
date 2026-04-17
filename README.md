@@ -88,7 +88,7 @@ Implemented today:
 
 - `cfwarp-cli` Docker-oriented WireGuard backend flow
 - experimental native MASQUE HTTP/SOCKS runtime path
-- built-in WARP address inspection, manual rotation, daemon-managed caps checks, and lightweight unlock probes
+- built-in WARP address inspection, manual rotation, daemon-managed caps checks, lightweight unlock probes, and hashed rotation memory with IPv4/IPv6 distinctness policies
 - multi-arch GHCR container publishing workflow for Alpine and Debian variants
 - published-image benchmark harness
 - comparison against original `MicroWARP`

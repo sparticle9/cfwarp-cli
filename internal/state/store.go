@@ -101,6 +101,30 @@ func LoadLastGoodAccount(d Dirs) (AccountState, error) {
 	return acc, nil
 }
 
+// SaveRotationHistory writes the hashed rotation memory store.
+func SaveRotationHistory(d Dirs, h RotationHistory) error {
+	h.Normalize()
+	if err := os.MkdirAll(d.Config, 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	return writeSecure(d.RotationHistoryFile(), h)
+}
+
+// LoadRotationHistory reads the hashed rotation memory store.
+func LoadRotationHistory(d Dirs) (RotationHistory, error) {
+	h := RotationHistory{}
+	err := readJSON(d.RotationHistoryFile(), &h)
+	if errors.Is(err, ErrNotFound) {
+		h.Normalize()
+		return h, ErrNotFound
+	}
+	if err != nil {
+		return h, err
+	}
+	h.Normalize()
+	return h, nil
+}
+
 // SaveSettings writes s to settings.json in d.Config.
 func SaveSettings(d Dirs, s Settings) error {
 	s.Normalize()

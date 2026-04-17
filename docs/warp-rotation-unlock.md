@@ -5,6 +5,7 @@ This document covers the current minimal implementation for:
 - inspecting assigned WARP addresses
 - validating built-in capability probes
 - rotating registrations manually
+- keeping hashed memory of previously seen assigned addresses
 - running a long-lived daemon that uses configured capability checks to decide when to rotate
 
 ## Model
@@ -161,10 +162,35 @@ Current schema additions are:
     "settle_time_seconds": 12,
     "cooldown_seconds": 1800,
     "restore_last_good": true,
-    "enroll_masque": false
+    "enroll_masque": false,
+    "distinctness": "either",
+    "history_size": 128
+  },
+  "masque_options": {
+    "use_ipv6": false
   }
 }
 ```
+
+## Rotation memory and v4/v6 policy
+
+Each observed assigned address set is stored in durable hashed memory at `rotation-history.json`.
+
+The file stores only hashes and counters, not raw historical IPs.
+
+`rotation.distinctness` controls what counts as a real rotation:
+
+- `either` — accept a new IPv4 or a new IPv6
+- `ipv4` — require a new IPv4
+- `ipv6` — require a new IPv6
+- `both` — require both IPv4 and IPv6 to be new
+
+`rotation.history_size` bounds how many hashed assignments are retained.
+
+For MASQUE endpoint family preference, continue to use:
+
+- `masque_options.use_ipv6=false` for IPv4 endpoint selection
+- `masque_options.use_ipv6=true` for IPv6 endpoint selection
 
 ## Built-in cap probes
 

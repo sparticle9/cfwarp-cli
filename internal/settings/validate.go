@@ -39,6 +39,13 @@ var validCapProbes = map[string]bool{
 	"chatgpt":  true,
 }
 
+var validRotationDistinctness = map[string]bool{
+	state.RotationDistinctnessEither: true,
+	state.RotationDistinctnessIPv4:   true,
+	state.RotationDistinctnessIPv6:   true,
+	state.RotationDistinctnessBoth:   true,
+}
+
 // Validate checks s for invalid or inconsistent values.
 // It returns the first error found, naming the offending field.
 func Validate(s state.Settings) error {
@@ -122,6 +129,9 @@ func Validate(s state.Settings) error {
 	}
 
 	if s.Rotation != nil {
+		if s.Rotation.Distinctness != "" && !validRotationDistinctness[s.Rotation.Distinctness] {
+			return fmt.Errorf("invalid rotation.distinctness %q: must be one of %v", s.Rotation.Distinctness, keys(validRotationDistinctness))
+		}
 		if s.Rotation.Enabled {
 			if s.Rotation.MaxAttemptsPerIncident <= 0 {
 				return fmt.Errorf("invalid rotation.max_attempts_per_incident %d: must be > 0", s.Rotation.MaxAttemptsPerIncident)
@@ -129,9 +139,15 @@ func Validate(s state.Settings) error {
 			if s.Rotation.SettleTimeSeconds <= 0 {
 				return fmt.Errorf("invalid rotation.settle_time_seconds %d: must be > 0", s.Rotation.SettleTimeSeconds)
 			}
+			if s.Rotation.HistorySize <= 0 {
+				return fmt.Errorf("invalid rotation.history_size %d: must be > 0", s.Rotation.HistorySize)
+			}
 		}
 		if s.Rotation.CooldownSeconds < 0 {
 			return fmt.Errorf("invalid rotation.cooldown_seconds %d: must be >= 0", s.Rotation.CooldownSeconds)
+		}
+		if s.Rotation.HistorySize < 0 {
+			return fmt.Errorf("invalid rotation.history_size %d: must be >= 0", s.Rotation.HistorySize)
 		}
 	}
 
