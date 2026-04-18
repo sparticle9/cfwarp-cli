@@ -37,7 +37,8 @@ require() {
   fi
 }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 INVENTORY="${CFWARP_ANSIBLE_INVENTORY:-$REPO_ROOT/ansible/inventory.ini}"
 LIMIT="${CFWARP_ANSIBLE_LIMIT:-warp}"
 COMPOSE_DIR="${CFWARP_REMOTE_COMPOSE_DIR:-/opt/cfwarp-dogfood}"
@@ -115,7 +116,7 @@ main() {
       # syntax: exec <target-pattern> -- <command...>
       local target_pattern=$1
       shift
-      if [[ "$1" == "--" ]]; then
+      if [[ "$#" -gt 0 && "$1" == "--" ]]; then
         shift
       fi
       if [[ $# -lt 1 ]]; then

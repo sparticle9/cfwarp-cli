@@ -24,7 +24,8 @@ Start here:
 - `../.pi/agent/skills/cfwarp-local-remote-ops/SKILL.md`
   - local tmux-based deploy/ops workflow
   - local vs remote Linux runbook
-  - common status/rotation/bench checks
+- `../.pi/agent/skills/cfwarp-local-remote-ops/references/cli-command-reference.md`
+  - copy/paste CLI command reference for local and remote quick start
 
 - `warp-rotation-unlock.md`
   - transport / access / caps / rotation model
