@@ -46,16 +46,24 @@ jobs:
           COMMIT="${{ steps.relmeta.outputs.commit }}"
           BUILD_DATE="${{ steps.relmeta.outputs.build_date }}"
 
-          for GOARCH in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build \
+          for TARGET in \
+            "linux amd64 linux-amd64" \
+            "linux arm64 linux-arm64" \
+            "darwin arm64 darwin-arm64"; do
+            set -- ${TARGET}
+            GOOS=$1
+            GOARCH=$2
+            NAME=$3
+
+            CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} go build \
               -trimpath \
               -ldflags="-s -w \
                 -X github.com/nexus/cfwarp-cli/internal/version.Version=${VERSION} \
                 -X github.com/nexus/cfwarp-cli/internal/version.Commit=${COMMIT} \
                 -X github.com/nexus/cfwarp-cli/internal/version.Date=${BUILD_DATE}" \
-              -o dist/cfwarp-cli-linux-${GOARCH}-${VERSION} .
+              -o dist/cfwarp-cli-${NAME}-${VERSION} .
           done
-          cd dist && sha256sum cfwarp-cli-linux-* > sha256sums.txt
+          cd dist && sha256sum cfwarp-cli-*-${VERSION} > sha256sums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -63,4 +71,5 @@ jobs:
           files: |
             dist/cfwarp-cli-linux-amd64-${{ steps.relmeta.outputs.version }}
             dist/cfwarp-cli-linux-arm64-${{ steps.relmeta.outputs.version }}
+            dist/cfwarp-cli-darwin-arm64-${{ steps.relmeta.outputs.version }}
             dist/sha256sums.txt
