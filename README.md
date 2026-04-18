@@ -430,6 +430,7 @@ cfwarp-cli completion bash --init-file ~/.bashrc.local
 - `docs/README.md` — documentation map
 - `docs/dogfood-debian13.md` — remote host deployment and sing-box integration
 - `docs/warp-rotation-unlock.md` — caps, rotation, daemon, hashed IP memory
+- `docs/cli-reference.md` — Linux command reference and workflow index
 - `.pi/agent/skills/cfwarp-local-remote-ops/SKILL.md` — local tmux-first ops workflow and remote Linux deployment guidance
 - `.pi/agent/skills/cfwarp-local-remote-ops/references/cli-command-reference.md` — command reference for first-run local + remote usage
 

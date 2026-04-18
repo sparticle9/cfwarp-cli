@@ -26,6 +26,8 @@ Start here:
   - local vs remote Linux runbook
 - `../.pi/agent/skills/cfwarp-local-remote-ops/references/cli-command-reference.md`
   - copy/paste CLI command reference for local and remote quick start
+- `cli-reference.md`
+  - Linux command reference and command matrix
 
 - `warp-rotation-unlock.md`
   - transport / access / caps / rotation model
