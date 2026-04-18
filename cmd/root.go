@@ -7,6 +7,7 @@ import (
 
 	_ "github.com/nexus/cfwarp-cli/internal/backend/native"
 	_ "github.com/nexus/cfwarp-cli/internal/backend/singbox"
+	"github.com/nexus/cfwarp-cli/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -53,10 +54,33 @@ func Execute() {
 	}
 }
 
-// platformCheck returns an error when the OS is unsupported.
+// platformCheck returns an error when the current host is outside the broad
+// control-plane support matrix.
 func platformCheck() error {
-	if runtime.GOOS != "linux" {
-		return fmt.Errorf("unsupported platform %q: cfwarp-cli requires Linux (or a Linux container)", runtime.GOOS)
+	switch {
+	case runtime.GOOS == "linux":
+		return nil
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
+		return nil
+	default:
+		return fmt.Errorf("unsupported platform %q/%q: cfwarp-cli currently supports Linux, plus macOS on Apple Silicon for selected workflows", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
+// platformCheckSettings enforces the runtime connectivity matrix for the
+// resolved settings on the current platform.
+func platformCheckSettings(sett state.Settings) error {
+	if err := platformCheck(); err != nil {
+		return err
+	}
+	if runtime.GOOS == "linux" {
+		return nil
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if sett.RuntimeFamily == state.RuntimeFamilyLegacy && sett.Transport == state.TransportWireGuard {
+			return nil
+		}
+		return fmt.Errorf("unsupported runtime on %s/%s: macOS on Apple Silicon currently supports the WireGuard legacy lane only", runtime.GOOS, runtime.GOARCH)
 	}
 	return nil
 }

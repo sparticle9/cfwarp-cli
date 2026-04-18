@@ -20,6 +20,7 @@ var settingsFlags struct {
 	proxyPassword    string
 	endpointOverride string
 	logLevel         string
+	settingsFile     string
 }
 
 func init() {
@@ -35,6 +36,7 @@ func init() {
 	pf.StringVar(&settingsFlags.proxyPassword, "proxy-password", "", "proxy auth password")
 	pf.StringVar(&settingsFlags.endpointOverride, "endpoint", "", "WireGuard peer endpoint override (host:port)")
 	pf.StringVar(&settingsFlags.logLevel, "log-level", "", "log level: debug, info, warn, error (default: info)")
+	pf.StringVar(&settingsFlags.settingsFile, "settings-file", "", "optional standalone settings.json path")
 }
 
 // resolveSettings builds the final Settings for the given command by applying
@@ -76,6 +78,9 @@ func resolveSettings(c *cobra.Command, dirs state.Dirs) (state.Settings, error) 
 	}
 	if changed("log-level") {
 		o.LogLevel = &settingsFlags.logLevel
+	}
+	if changed("settings-file") {
+		o.SettingsFile = &settingsFlags.settingsFile
 	}
 
 	return settings.Load(dirs, o)

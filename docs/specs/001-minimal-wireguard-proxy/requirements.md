@@ -2,7 +2,7 @@
 
 ## Introduction
 
-`cfwarp-cli` will start as a Linux-first, Docker-first CLI for bringing up a Cloudflare-WARP-backed explicit proxy using a WireGuard-compatible backend. The initial MVP prioritizes minimal effort, reproducible deployment, and clear ownership of the registration and configuration path.
+`cfwarp-cli` starts as a CLI for bringing up a Cloudflare-WARP-backed explicit proxy using a WireGuard-compatible backend, with current support aimed at Linux and macOS on Apple Silicon and broader platform support expected later. The initial MVP prioritizes minimal effort, reproducible deployment, and clear ownership of the registration and configuration path, with Docker as the primary deployment path.
 
 The MVP deliberately excludes transparent routing, kernel-level route takeover, and MASQUE implementation work. Those remain future phases.
 
@@ -24,7 +24,7 @@ The MVP deliberately excludes transparent routing, kernel-level route takeover, 
 
 ## Requirements
 
-### 1. CLI foundation and Linux-first runtime
+### 1. CLI foundation and current runtime support
 
 **User story:** As an operator, I want a single CLI that manages the proxy lifecycle, so that I can use Cloudflare WARP from Linux hosts or Docker without glue scripts.
 
@@ -73,7 +73,7 @@ The MVP deliberately excludes transparent routing, kernel-level route takeover, 
 5.3. **When** the operator runs an endpoint validation or test command, **the system shall** attempt a basic probe or config render sanity check and report success or failure per candidate.
 5.4. **If** an endpoint value is malformed, **the system shall** reject it before launch with a validation error.
 
-### 6. Docker-first deployment support
+### 6. Primary Docker deployment support
 
 **User story:** As an operator, I want a specific Docker deployment path, so that I can run the proxy reproducibly without hand-writing bespoke shell entrypoints.
 

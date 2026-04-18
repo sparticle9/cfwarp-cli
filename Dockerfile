@@ -53,7 +53,6 @@ COPY --from=singbox  /out/sing-box        /usr/local/bin/sing-box
 COPY docker/entrypoint.sh                 /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-VOLUME /home/cfwarp/.local/state/cfwarp-cli
 EXPOSE 1080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
   CMD ["cfwarp-cli", "status", "--state-dir", "/home/cfwarp/.local/state/cfwarp-cli", "--require-account", "--require-running", "--require-reachable"]

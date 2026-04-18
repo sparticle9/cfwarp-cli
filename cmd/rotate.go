@@ -41,6 +41,9 @@ results is found or the attempt budget is exhausted.`,
 		if err != nil {
 			return fmt.Errorf("resolve settings: %w", err)
 		}
+		if err := platformCheckSettings(sett); err != nil {
+			return err
+		}
 
 		services, err := unlock.NormalizeServices(rotateServices)
 		if err != nil {

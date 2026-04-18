@@ -134,19 +134,20 @@ func SaveSettings(d Dirs, s Settings) error {
 	return writeSecure(d.SettingsFile(), s)
 }
 
-// LoadSettings reads settings.json from d.Config.
-// Returns defaults with ErrNotFound if the file does not exist.
-func LoadSettings(d Dirs) (Settings, error) {
+// LoadSettingsFile reads a settings JSON file from an explicit path.
+func LoadSettingsFile(path string) (Settings, error) {
 	s := DefaultSettings()
-	err := readJSON(d.SettingsFile(), &s)
-	if errors.Is(err, ErrNotFound) {
-		return s, ErrNotFound
-	}
-	if err != nil {
+	if err := readJSON(path, &s); err != nil {
 		return s, err
 	}
 	s.Normalize()
 	return s, nil
+}
+
+// LoadSettings reads settings.json from d.Config.
+// Returns defaults with ErrNotFound if the file does not exist.
+func LoadSettings(d Dirs) (Settings, error) {
+	return LoadSettingsFile(d.SettingsFile())
 }
 
 // SaveRuntime writes rt to runtime.json in d.Runtime.

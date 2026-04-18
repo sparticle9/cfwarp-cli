@@ -111,6 +111,12 @@ Important behavior:
 
 The config is carried by `settings.json` and the existing flag/env resolution layer.
 
+You can provide configuration in three common ways:
+
+- no file at all, relying on defaults
+- a standalone settings file via `--settings-file` or `CFWARP_SETTINGS_FILE`
+- a durable state dir containing `settings.json` plus account and rotation state
+
 Current schema additions are:
 
 ```json

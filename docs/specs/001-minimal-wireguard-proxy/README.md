@@ -12,7 +12,7 @@
 
 | Document | Status | Notes |
 |----------|--------|-------|
-| `requirements.md` | completed | Linux-first, Docker-first explicit proxy MVP |
+| `requirements.md` | completed | Explicit proxy MVP with current Linux/macOS (Apple Silicon) support and Docker as the primary deployment path |
 | `design.md` | completed | Uses direct Cloudflare registration + `sing-box` WireGuard outbound |
 | `tasks.md` | completed | Incremental coding plan for initial implementation |
 

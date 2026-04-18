@@ -36,6 +36,9 @@ account state and settings, and writes it to stdout or a file (--output).`,
 		if err != nil {
 			return fmt.Errorf("resolve settings: %w", err)
 		}
+		if err := platformCheckSettings(sett); err != nil {
+			return err
+		}
 
 		b, err := configuredBackend(sett)
 		if err != nil {

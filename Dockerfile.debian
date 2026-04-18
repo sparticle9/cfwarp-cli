@@ -52,7 +52,6 @@ COPY --from=builder  /out/cfwarp-cli   /usr/local/bin/cfwarp-cli
 COPY --from=singbox  /out/sing-box     /usr/local/bin/sing-box
 COPY --from=builder --chown=65532:65532 /out/home/nonroot/.local/state/cfwarp-cli /home/nonroot/.local/state/cfwarp-cli
 
-VOLUME /home/nonroot/.local/state/cfwarp-cli
 EXPOSE 1080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
   CMD ["/usr/local/bin/cfwarp-cli", "status", "--state-dir", "/home/nonroot/.local/state/cfwarp-cli", "--require-account", "--require-running", "--require-reachable"]

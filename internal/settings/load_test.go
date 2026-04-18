@@ -89,6 +89,31 @@ func TestLoad_PersistedOverridesDefaults(t *testing.T) {
 	}
 }
 
+func TestLoad_StandaloneSettingsFile_OverridesPersisted(t *testing.T) {
+	d := tempDirs(t)
+	persisted := state.DefaultSettings()
+	persisted.ListenPort = 9090
+	writeSettings(t, d, persisted)
+
+	external := state.DefaultSettings()
+	external.ListenPort = 7070
+	external.LogLevel = "debug"
+	external.Mode = state.ModeHTTP
+	externalPath := filepath.Join(t.TempDir(), "settings.json")
+	data, _ := json.Marshal(external)
+	if err := os.WriteFile(externalPath, data, 0o600); err != nil {
+		t.Fatalf("write external settings: %v", err)
+	}
+
+	s, err := settings.Load(d, settings.Overrides{SettingsFile: strPtr(externalPath)})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.ListenPort != 7070 || s.LogLevel != "debug" || s.Mode != state.ModeHTTP {
+		t.Fatalf("expected standalone settings file to win, got %+v", s)
+	}
+}
+
 // --- env vars override persisted ---
 
 func TestLoad_EnvOverridesPersisted(t *testing.T) {
@@ -109,6 +134,54 @@ func TestLoad_EnvOverridesPersisted(t *testing.T) {
 	}
 	if s.LogLevel != "debug" {
 		t.Errorf("expected env log_level debug, got %s", s.LogLevel)
+	}
+}
+
+func TestLoad_EnvSettingsFile(t *testing.T) {
+	d := tempDirs(t)
+	external := state.DefaultSettings()
+	external.ListenHost = "127.0.0.1"
+	external.ListenPort = 9091
+	externalPath := filepath.Join(t.TempDir(), "env-settings.json")
+	data, _ := json.Marshal(external)
+	if err := os.WriteFile(externalPath, data, 0o600); err != nil {
+		t.Fatalf("write external settings: %v", err)
+	}
+	t.Setenv("CFWARP_SETTINGS_FILE", externalPath)
+
+	s, err := settings.Load(d, settings.Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.ListenHost != "127.0.0.1" || s.ListenPort != 9091 {
+		t.Fatalf("expected env settings file to load, got %+v", s)
+	}
+}
+
+func TestLoad_FlagSettingsFileOverridesEnvSettingsFile(t *testing.T) {
+	d := tempDirs(t)
+	envSettings := state.DefaultSettings()
+	envSettings.ListenPort = 9091
+	envPath := filepath.Join(t.TempDir(), "env-settings.json")
+	envData, _ := json.Marshal(envSettings)
+	if err := os.WriteFile(envPath, envData, 0o600); err != nil {
+		t.Fatalf("write env settings: %v", err)
+	}
+	flagSettings := state.DefaultSettings()
+	flagSettings.ListenPort = 9191
+	flagPath := filepath.Join(t.TempDir(), "flag-settings.json")
+	flagData, _ := json.Marshal(flagSettings)
+	if err := os.WriteFile(flagPath, flagData, 0o600); err != nil {
+		t.Fatalf("write flag settings: %v", err)
+	}
+	t.Setenv("CFWARP_SETTINGS_FILE", envPath)
+
+	s, err := settings.Load(d, settings.Overrides{SettingsFile: strPtr(flagPath)})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.ListenPort != 9191 {
+		t.Fatalf("expected flag settings file to win, got %+v", s)
 	}
 }
 

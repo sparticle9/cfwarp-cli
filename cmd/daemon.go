@@ -494,6 +494,9 @@ var daemonRunCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := platformCheckSettings(sett); err != nil {
+			return err
+		}
 		mgr := newDaemonManager(c, dirs, sett)
 		ctx, cancel := signal.NotifyContext(c.Context(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()

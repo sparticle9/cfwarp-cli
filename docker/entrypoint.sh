@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+# Durable data is optional. If no host path is mounted, the container simply
+# uses its in-container state dir and remains ephemeral.
 STATE_DIR="${CFWARP_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}"
 
 register_args="register --state-dir ${STATE_DIR}"

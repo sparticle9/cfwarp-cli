@@ -1,145 +1,355 @@
 # cfwarp-cli
 
-`cfwarp-cli` is a CLI-first toolkit for building lightweight, Linux-friendly outbound connectivity on top of Cloudflare WARP.
+`cfwarp-cli` is a Docker-friendly toolkit for running Cloudflare WARP-backed outbound proxy lanes with an explicit, inspectable control plane.
 
-The project started from a practical gap: existing WARP-based container solutions tend to optimize for convenience or feature breadth, while server-side workloads often need something narrower and more explicit:
+Current support is aimed at:
 
-- deterministic Docker deployment
-- low operational footprint
-- explicit proxy and sidecar-style egress patterns
-- controllable endpoint selection / experimentation
-- honest, benchmarkable tradeoffs between implementations
+- **Linux** — full runtime focus
+- **macOS on Apple Silicon** — currently supported for local CLI/config workflows, with the legacy WireGuard lane enabled in the support matrix
 
-## Why this project exists
+with broader platform support expected over time.
 
-The main motivation is to own the parts that matter for server-side egress:
+Today the project supports two main runtime paths:
 
-- bootstrap and manage WARP connectivity without hiding the moving parts
-- compare multiple tunnel/proxy approaches under the same benchmark harness
-- keep deployment simple enough for small VPS or sidecar scenarios
-- leave room for future backends such as kernel WireGuard and MASQUE without locking the CLI contract too early
+- **stable:** `singbox-wireguard`
+- **experimental:** native **MASQUE**
 
-## Current implementation direction
+It is designed for server-side use cases where you want a small, scriptable tool rather than a desktop-style VPN client:
 
-The current implementation remains intentionally narrow, but is no longer WireGuard-only:
-
-- **Docker-first**
-- **Linux-first**
-- **explicit proxy mode first**
-- **stable `singbox-wireguard` backend**
-- **experimental native MASQUE backend**
-
-## Deployment / usage scenarios
-
-The codebase is currently oriented around three practical deployment patterns:
-
-1. **Explicit proxy container**
-   - expose a SOCKS5 endpoint for proxy-aware clients
-   - useful for crawlers, API clients, and tools that can already speak SOCKS
-
-2. **Sidecar / shared-network egress**
-   - run the WARP-backed container next to another container and share its network namespace
-   - useful when the application itself does not support proxy configuration well
-
-3. **Implementation comparison / battle testing**
-   - compare multiple published images and upstream implementations under one repeatable harness
-   - currently includes `cfwarp-cli` variants, the original `MicroWARP`, and vanilla `usque` in the protocol-focused real-target bench
-
-## Performance comparison philosophy
-
-This project does **not** treat one benchmark as sufficient.
-
-It separates:
-
-- **raw tunnel behavior**
-  - RTT
-  - bidirectional iperf3 throughput
-  - large-file HTTP transfer
-
-- **API-like workload behavior**
-  - metadata-style small requests
-  - LLM-style synchronous POSTs
-  - upload-heavy requests
-  - long-lived streaming responses
-
-This matters because the fastest raw tunnel is not always the best fit for real workloads such as:
-
-- LLM API calls
-- TTS / ASR calls
-- metadata retrieval
-- many concurrent small/medium requests
-
-## Documents
-
-- `docs/background.md` — research notes and implementation background
-- `docs/benchmark-package.md` — entry point for sharing the benchmark work internally
-- `docs/benchmark-mechanism.md` — benchmark harness design, phases, and result semantics
-- `docs/benchmark-report-case.md` — interpretation of the latest benchmark set for the intended workload mix
-- `docs/dogfood-debian13.md` — Debian 13 dogfood runbook for dual localhost-bound WireGuard and MASQUE proxies
-- `docs/warp-rotation-unlock.md` — WARP address rotation, access/caps config, and daemon control workflow
-- `docs/status/2026-04-native-masque-status.md` — public status memo for native MASQUE support
-- `docs/specs/001-minimal-wireguard-proxy/requirements.md` — MVP requirements
-- `docs/specs/001-minimal-wireguard-proxy/design.md` — MVP design and Docker deployment
-- `docs/specs/001-minimal-wireguard-proxy/tasks.md` — incremental implementation plan
+- localhost SOCKS5 / HTTP proxy exposure
+- Docker sidecar or shared-host egress
+- local CLI workflows on Linux and macOS (Apple Silicon)
+- optional explicit config in `settings.json`
+- CLI-friendly health, status, and rotation control
+- repeatable benchmarking across implementations
 
 ## Current status
 
-Implemented today:
+### Stable
 
-- `cfwarp-cli` Docker-oriented WireGuard backend flow
-- experimental native MASQUE HTTP/SOCKS runtime path
-- built-in WARP address inspection, manual rotation, daemon-managed caps checks, lightweight unlock probes, and hashed rotation memory with IPv4/IPv6 distinctness policies
-- multi-arch GHCR container publishing workflow for Alpine and Debian variants
-- published-image benchmark harness
-- comparison against original `MicroWARP`
-- protocol-focused real-target bench with vanilla `usque`, remote `iperf3`, and remote HTTP transfer
-- raw tunnel + API-like workload benchmarking
-- markdown/JSON report generation with per-container resource summaries
-- dogfood-oriented deploy and status playbooks for remote Docker hosts
+- WireGuard via `singbox-wireguard`
+- explicit proxy mode (`socks5`, `http`)
+- Docker / GHCR deployment flow
+- registration, import, render, start, stop, status
+- dogfood Ansible playbooks for remote hosts
 
-Not implemented yet:
+### Practical support matrix
 
-- full CLI/control-plane polish for the new transport-oriented UX
-- broader native runtime packaging and docs beyond the current Alpine-first path
-- chart generation in the reporting pipeline
-- broader provider/backend families beyond the current WARP-focused scope
+| capability | Linux | macOS (Apple Silicon) |
+|---|---:|---:|
+| config / validation / docs-driven workflows | yes | yes |
+| legacy WireGuard control plane (`register`, `import`, `render`, `up`, `down`) | yes | yes |
+| native MASQUE runtime | yes | no |
+| remote dogfood / Ansible deployment path | yes | no |
 
-## Project status
+### Experimental
 
-Current stable path:
+- native MASQUE runtime
+- daemon-managed capability checks
+- live rotation without restarting the daemon process
+- hashed rotation memory with IPv4 / IPv6 distinctness policies
 
-- `singbox-wireguard`
+If you need the safest current lane for real traffic, use **WireGuard**.
+If you want to evaluate the direction of the native runtime, run **MASQUE** alongside it and compare behavior.
 
-Current experimental path:
+## What the tool can do
 
-- native MASQUE
+### Registration and state
 
-Current dogfood posture:
+- register a new consumer WARP device
+- import existing WARP credentials
+- inspect current registration state and assigned addresses
 
-- use `singbox-wireguard` as the default lane for real daemon traffic
-- run native MASQUE alongside it on a second localhost-bound port for verification and comparison
+### Runtime control
 
-Recent MASQUE work completed:
+- render backend config
+- connect / disconnect the configured runtime
+- run a long-lived daemon
+- inspect runtime and backend status
+- force a live rotation with `daemon ctl rotate`
 
-- control-plane and runtime support for native MASQUE
-- runtime instrumentation and diagnostics
-- tuning knobs and protocol bench coverage
-- comparative evaluation against WireGuard and upstream `usque`
+### Exposure model
 
-Current state:
+Current access types:
 
-- native MASQUE support is real and usable for continued development
-- branch stable
-- tests green
-- benchmark evidence directional, not final
-- contributor help wanted on startup retry, endpoint family strategy, dataplane profiling, and packaging/docs
+- `socks5`
+- `http` (including HTTPS via CONNECT)
 
-See:
+Reserved for later:
 
+- `tun`
+
+### Rotation and health policy
+
+The current config model uses these terms:
+
+- **transport** — upstream tunnel protocol (`wireguard` or `masque`)
+- **access** — how local clients consume the tunnel (`socks5` or `http`)
+- **caps** — built-in capability probes
+- **rotation** — remediation policy when caps fail
+- **daemon** — the long-running manager process
+
+## Quick start
+
+### 1. Build or use a published image
+
+For deployable or shared usage, prefer the GHCR images built by GitHub Actions.
+
+Examples:
+
+- `ghcr.io/sparticle9/cfwarp-cli:latest`
+- `ghcr.io/sparticle9/cfwarp-cli:latest-debian`
+- `ghcr.io/sparticle9/cfwarp-cli:sha-<commit>`
+
+### 2. Pick the usage mode you want
+
+#### A. Out-of-the-box, no persistence
+
+For many quick scenarios, no config mount and no durable data mount should be needed:
+
+```bash
+docker run --rm -p 127.0.0.1:1080:1080 ghcr.io/sparticle9/cfwarp-cli:latest
+```
+
+This uses built-in defaults and ephemeral in-container state.
+
+#### B. Optional config file only
+
+If you want to control behavior without opting into full durable state, mount a standalone settings file:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:1080:1080 \
+  -v "$PWD/settings.json:/etc/cfwarp/settings.json:ro" \
+  -e CFWARP_SETTINGS_FILE=/etc/cfwarp/settings.json \
+  ghcr.io/sparticle9/cfwarp-cli:latest
+```
+
+#### C. Durable data directory
+
+If you want registration/account persistence, rotation memory, and reusable daemon state, mount a data directory too:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:1080:1080 \
+  -v "$PWD/settings.json:/etc/cfwarp/settings.json:ro" \
+  -v "$PWD/data:/home/cfwarp/.local/state/cfwarp-cli" \
+  -e CFWARP_SETTINGS_FILE=/etc/cfwarp/settings.json \
+  ghcr.io/sparticle9/cfwarp-cli:latest
+```
+
+For the Debian image, use `/home/nonroot/.local/state/cfwarp-cli` as the data mount path.
+
+### 3. Example `settings.json`
+
+Example `settings.json` for the stable WireGuard lane:
+
+```json
+{
+  "runtime_family": "legacy",
+  "transport": "wireguard",
+  "log_level": "info",
+  "access": [
+    {
+      "type": "socks5",
+      "listen_host": "0.0.0.0",
+      "listen_port": 1080
+    }
+  ],
+  "caps": {
+    "interval_seconds": 300,
+    "checks": [
+      {
+        "probe": "internet",
+        "required": true,
+        "rotate_on_fail": true,
+        "timeout_seconds": 10
+      }
+    ]
+  },
+  "rotation": {
+    "enabled": true,
+    "max_attempts_per_incident": 3,
+    "settle_time_seconds": 12,
+    "cooldown_seconds": 1800,
+    "restore_last_good": true,
+    "distinctness": "either",
+    "history_size": 128
+  }
+}
+```
+
+### 4. Validate the resolved config
+
+With a standalone settings file:
+
+```bash
+cfwarp-cli validate --json --settings-file /path/to/settings.json
+```
+
+With a durable data dir:
+
+```bash
+cfwarp-cli validate --json --state-dir /path/to/state
+```
+
+### 5. Run the daemon
+
+```bash
+cfwarp-cli daemon run --settings-file /path/to/settings.json
+```
+
+or
+
+```bash
+cfwarp-cli daemon run --state-dir /path/to/state
+```
+
+### 6. Inspect and control it
+
+```bash
+cfwarp-cli daemon ctl status --settings-file /path/to/settings.json
+cfwarp-cli daemon ctl check --settings-file /path/to/settings.json
+cfwarp-cli daemon ctl rotate --state-dir /path/to/state
+cfwarp-cli address show --json --state-dir /path/to/state
+```
+
+## Docker / remote-host usage
+
+The most fully documented deployment path today is still a Linux remote host.
+
+For a practical remote deployment with both WireGuard and MASQUE lanes side by side, start here:
+
+- `docs/dogfood-debian13.md`
+
+That runbook covers:
+
+- Docker Compose deployment
+- per-service bind-mounted state directories
+- localhost-only proxy ports
+- sing-box fragment integration
+- on-demand status inspection
+
+Relevant assets:
+
+- `deploy/docker-compose.dogfood.yml`
+- `deploy/dogfood.env.example`
+- `deploy/daemon-proxy.env.example`
+- `ansible/dogfood-deploy.yml`
+- `ansible/dogfood-status.yml`
+
+## Common commands
+
+### Registration
+
+```bash
+cfwarp-cli register --state-dir /path/to/state
+cfwarp-cli import --state-dir /path/to/state --file /path/to/account.json
+cfwarp-cli registration show --state-dir /path/to/state
+```
+
+### Runtime selection and startup
+
+```bash
+cfwarp-cli transport show --state-dir /path/to/state
+cfwarp-cli mode show --state-dir /path/to/state
+cfwarp-cli up --state-dir /path/to/state
+cfwarp-cli status --json --state-dir /path/to/state
+cfwarp-cli down --state-dir /path/to/state
+```
+
+### Rotation and unlock checks
+
+```bash
+cfwarp-cli unlock test --service gemini --service chatgpt --state-dir /path/to/state
+cfwarp-cli rotate --attempts 5 --service gemini --state-dir /path/to/state
+cfwarp-cli address show --json --state-dir /path/to/state
+```
+
+## User documentation map
+
+### Operator / user docs
+
+- `docs/README.md` — documentation map
+- `docs/dogfood-debian13.md` — remote host deployment and sing-box integration
+- `docs/warp-rotation-unlock.md` — caps, rotation, daemon, hashed IP memory
+
+### Project background and evaluation docs
+
+- `docs/background.md`
+- `docs/benchmark-mechanism.md`
+- `docs/benchmark-package.md`
+- `docs/benchmark-report-case.md`
 - `docs/status/2026-04-native-masque-status.md`
 - `docs/native-masque-vs-singbox-review.md`
+
+## Contributor guide
+
+If you want to work on the project, read:
+
 - `CONTRIBUTING.md`
+- `docs/README.md`
+- `docs/status/2026-04-native-masque-status.md`
+- `docs/specs/002-unified-transport-dataplane/design.md`
 
-## Contributing
+Good contribution areas right now:
 
-See `CONTRIBUTING.md` for test, benchmark, and review workflow.
+- native MASQUE startup reliability
+- endpoint family strategy and IPv4 / IPv6 behavior
+- userspace dataplane profiling
+- benchmark reporting and visualization
+- packaging and reproducible deployment
+- docs and usability polish
+
+## Development notes
+
+### Run tests
+
+```bash
+go test ./...
+```
+
+### Keep docs aligned with behavior
+
+If a change affects user-visible behavior, update the relevant docs in the same change set:
+
+- `README.md`
+- `CONTRIBUTING.md`
+- `docs/dogfood-debian13.md`
+- `docs/warp-rotation-unlock.md`
+- spec or status docs when architecture or scope changed
+
+### Security / hygiene rules
+
+Do not commit:
+
+- real host aliases or inventory details
+- local machine paths
+- tokens, keys, or secrets
+- user-specific environment details
+
+Use placeholders such as:
+
+- `proxy-host-1`
+- `/path/to/state`
+- `example-token`
+
+## Roadmap themes
+
+Near-term themes:
+
+- improve native MASQUE stability
+- keep WireGuard deployment simple and dependable
+- continue unifying runtime control around the transport/access/caps model
+- improve health reporting so container health matches real data-plane state more closely
+- make docs and operator workflows easier to follow
+
+## License / repository context
+
+This repository is currently best read as an actively developed, benchmark-driven engineering project rather than a polished end-user VPN product.
+
+If you want a production-oriented starting point today:
+
+- use the WireGuard lane first
+- treat native MASQUE as an evaluation lane
+- prefer GHCR-built images for real deployment

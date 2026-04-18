@@ -35,6 +35,9 @@ foreground (useful for Docker entrypoints).`,
 		if err != nil {
 			return fmt.Errorf("resolve settings: %w", err)
 		}
+		if err := platformCheckSettings(sett); err != nil {
+			return err
+		}
 
 		acc, err := state.LoadAccount(dirs)
 		if err != nil {

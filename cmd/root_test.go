@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/nexus/cfwarp-cli/internal/state"
 )
 
 // executeRoot runs the root command with the given args and returns combined output.
@@ -49,17 +51,49 @@ func TestHelp(t *testing.T) {
 
 func TestPlatformCheck(t *testing.T) {
 	err := platformCheck()
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" || (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") {
 		if err != nil {
-			t.Errorf("platformCheck should pass on linux, got: %v", err)
+			t.Errorf("platformCheck should pass on supported platforms, got: %v", err)
 		}
 	} else {
 		if err == nil {
-			t.Error("platformCheck should fail on non-linux")
+			t.Error("platformCheck should fail on unsupported platforms")
 		}
 		if !strings.Contains(err.Error(), "unsupported platform") {
 			t.Errorf("expected 'unsupported platform' in error, got: %v", err)
 		}
+	}
+}
+
+func TestPlatformCheckSettingsSupportMatrix(t *testing.T) {
+	legacy := state.DefaultSettings()
+	legacy.RuntimeFamily = state.RuntimeFamilyLegacy
+	legacy.Transport = state.TransportWireGuard
+
+	native := state.DefaultSettings()
+	native.RuntimeFamily = state.RuntimeFamilyNative
+	native.Transport = state.TransportMasque
+
+	if runtime.GOOS == "linux" {
+		if err := platformCheckSettings(legacy); err != nil {
+			t.Fatalf("linux should allow legacy wireguard: %v", err)
+		}
+		if err := platformCheckSettings(native); err != nil {
+			t.Fatalf("linux should allow native masque: %v", err)
+		}
+		return
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		if err := platformCheckSettings(legacy); err != nil {
+			t.Fatalf("darwin arm64 should allow legacy wireguard: %v", err)
+		}
+		if err := platformCheckSettings(native); err == nil {
+			t.Fatal("darwin arm64 should reject native masque runtime")
+		}
+		return
+	}
+	if err := platformCheckSettings(legacy); err == nil {
+		t.Fatal("unsupported platforms should fail runtime matrix check")
 	}
 }
 

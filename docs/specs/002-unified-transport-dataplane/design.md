@@ -364,7 +364,7 @@ Transitional approach:
 This phase targets **Alpine only**.
 
 Implications:
-- maintain a single Alpine-first Dockerfile/runtime image for the evolving native path
+- maintain a single primary Dockerfile/runtime image for the evolving native path, while keeping broader packaging options open later
 - keep the packaging surface minimal while transport/runtime interfaces are changing
 - defer Debian/distroless or multi-image matrix work until the native runtime architecture stabilizes
 

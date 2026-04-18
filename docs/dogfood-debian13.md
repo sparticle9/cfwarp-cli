@@ -41,7 +41,7 @@ See also:
   - dual-proxy stack
   - uses the same published cfwarp image for both protocol lanes
   - binds SOCKS listeners only on `127.0.0.1`
-  - uses per-service bind-mounted state directories so `settings.json` controls container behavior by default
+  - uses per-service bind-mounted state directories so `settings.json` plus durable account/rotation state control container behavior for long-lived dogfood
 - `deploy/dogfood.env.example`
   - compose env file template
 - `deploy/daemon-proxy.env.example`
@@ -52,6 +52,7 @@ See also:
 - `ansible/dogfood-deploy.yml`
   - copies compose files to remote host
   - writes per-service `settings.json` files into bind-mounted state directories
+  - this is an operator-focused durable deployment choice, not a requirement for simple one-off Docker usage
   - starts both proxies on localhost-only nonstandard ports `16080` and `16081`
   - can inject two local SOCKS outbounds into sing-box config when fragment files are available
   - adds `geosite-google-deepmind` rule-set routing to the managed cfwarp outbound

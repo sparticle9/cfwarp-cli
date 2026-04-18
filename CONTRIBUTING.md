@@ -2,65 +2,135 @@
 
 Thanks for looking at `cfwarp-cli`.
 
-Project is early, narrow, and benchmark-driven. Best contributions come from changes with clear before/after evidence.
+This project is still early, but it already has two real audiences:
 
-## Good first contribution areas
+- **operators** who want a practical WARP-backed proxy lane on Linux / Docker
+- **contributors** who want to improve the runtime, control plane, docs, and benchmark evidence
 
-- native MASQUE startup retry root cause
-- endpoint family selection strategy
-- packet size / QUIC tuning experiments
+The best changes are small, explicit, and backed by tests, runtime evidence, or benchmark results.
+
+## Before you start
+
+Read these first:
+
+- `README.md`
+- `docs/README.md`
+- `docs/status/2026-04-native-masque-status.md`
+- `docs/warp-rotation-unlock.md`
+
+If your change is architectural, also read:
+
+- `docs/specs/002-unified-transport-dataplane/design.md`
+- `docs/native-masque-vs-singbox-review.md`
+
+If your change is deployment-oriented, also read:
+
+- `docs/dogfood-debian13.md`
+
+## Good contribution areas
+
+Current high-value areas:
+
+- native MASQUE startup and reconnect reliability
+- endpoint family strategy and IPv4 / IPv6 behavior
 - userspace dataplane profiling
 - benchmark reporting and visualization
 - packaging and reproducibility
-
-See:
-
-- `docs/status/2026-04-native-masque-status.md`
-- `docs/masque-performance-plan.md`
-- `docs/native-masque-vs-singbox-review.md`
-- `docs/benchmark-mechanism.md`
+- operator UX and documentation polish
 
 ## Ground rules
 
 Keep tracked files free of:
 
-- host aliases
-- inventory entries tied to real machines
-- local paths
-- account details
+- real host aliases
+- real inventory entries
+- local machine paths
+- account identifiers tied to a user
 - tokens, keys, or secrets
 
-Use generic placeholders in docs and examples.
+Use generic placeholders in examples:
 
-## Dev workflow
+- `proxy-host-1`
+- `/path/to/project`
+- `/path/to/state`
+- `example-token`
 
-### 1. Run tests
+For deployable artifacts, prefer **GitHub Actions / GHCR-built images** over local-only images.
+
+## Development workflow
+
+### 1. Make the smallest useful change
+
+Prefer focused diffs over broad cleanup unless the task is explicitly a cleanup pass.
+
+### 2. Run tests
 
 ```bash
 go test ./...
 ```
 
-### 2. Read status and benchmark docs before changing MASQUE code
+If you touched a narrower area first, run the local package tests before the full suite.
 
-Start here:
+### 3. Update docs when behavior changes
 
-- `docs/status/2026-04-native-masque-status.md`
-- `docs/benchmark-mechanism.md`
+If your change affects behavior, config, operations, or terminology, update the relevant docs in the same change.
 
-### 3. Keep changes measurable
+Most commonly:
 
-For perf or runtime behavior changes, include at least one of:
+- `README.md`
+- `CONTRIBUTING.md`
+- `docs/README.md`
+- `docs/dogfood-debian13.md`
+- `docs/warp-rotation-unlock.md`
 
-- quick bench result
+### 4. Keep changes measurable when possible
+
+For performance or runtime behavior changes, include at least one of:
+
+- benchmark output
 - real-target bench result
 - profiling data
-- log/runtime evidence for startup behavior
+- runtime / log evidence
+- before/after status output
+
+## Repo map
+
+### User / operator docs
+
+- `README.md`
+- `docs/README.md`
+- `docs/dogfood-debian13.md`
+- `docs/warp-rotation-unlock.md`
+
+### Development / architecture docs
+
+- `docs/specs/001-minimal-wireguard-proxy/*`
+- `docs/specs/002-unified-transport-dataplane/*`
+- `docs/status/2026-04-native-masque-status.md`
+- `docs/native-masque-vs-singbox-review.md`
+- `docs/tun-decision-note.md`
+
+### Benchmark docs
+
+- `docs/benchmark-package.md`
+- `docs/benchmark-mechanism.md`
+- `docs/benchmark-report-case.md`
+- `docs/masque-performance-plan.md`
+- `docs/masque-real-target-matrix-20260408.md`
+
+### Deployment assets
+
+- `deploy/docker-compose.dogfood.yml`
+- `deploy/dogfood.env.example`
+- `deploy/daemon-proxy.env.example`
+- `ansible/dogfood-deploy.yml`
+- `ansible/dogfood-status.yml`
 
 ## Benchmark entry points
 
 ### Quick protocol comparison
 
-Use for fast proxy-path comparison on remote host.
+Use for fast proxy-path comparison on a remote host.
 
 File:
 
@@ -72,7 +142,7 @@ Example:
 ansible-playbook -i inventory.ini ansible/protocol-quick-bench.yml --limit warp
 ```
 
-With tuning:
+Example with tuning:
 
 ```bash
 ansible-playbook -i inventory.ini ansible/protocol-quick-bench.yml --limit warp \
@@ -100,7 +170,7 @@ ansible-playbook -i inventory.ini ansible/protocol-real-bench.yml --limit warp \
   -e bench_id=protocol-real-test
 ```
 
-Tuned example:
+Example with tuning:
 
 ```bash
 ansible-playbook -i inventory.ini ansible/protocol-real-bench.yml --limit warp \
@@ -114,35 +184,29 @@ ansible-playbook -i inventory.ini ansible/protocol-real-bench.yml --limit warp \
   -e masque_reconnect_delay_millis=1200
 ```
 
-## Benchmark notes
+## What a good PR should answer
 
-- quick bench is practical proxy-path comparison, not transport-pure microbenchmark
-- real-target bench compares `wireguard`, native `masque`, and upstream `usque`
-- longer runs beat one-off wins
-- startup success and retry count matter, not only throughput
-
-## Pull request guidance
-
-PR should answer:
+A good PR description answers:
 
 1. What changed?
-2. Why?
-3. What evidence says change helps?
+2. Why was it needed?
+3. What evidence suggests it helps?
 4. What tradeoff changed?
-5. What remains unresolved?
+5. What is still unresolved?
 
 Good PR shape:
 
-- small focused diff
-- updated doc or note when behavior changes
-- benchmark or test output in PR body
+- focused diff
+- tests updated or added when appropriate
+- docs updated when behavior changed
+- benchmark or runtime evidence in the PR body for performance / reliability work
 
-## If you want to help but do not know where to start
+## If you are not sure where to start
 
-Open issue or PR draft around one of these:
+A solid first contribution is often one of these:
 
-- reproduce startup retry cause
-- compare IPv4 vs IPv6 endpoint selection across more paths
-- run packet size sweep and summarize results
-- profile userspace dataplane under download-heavy load
-- improve public benchmark result presentation
+- reproduce and isolate a native MASQUE startup failure
+- compare IPv4 vs IPv6 endpoint behavior across more paths
+- run a packet-size tuning sweep and summarize it clearly
+- improve a confusing operator workflow in docs
+- make a status / health output easier to understand

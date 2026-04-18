@@ -26,6 +26,7 @@ type Overrides struct {
 	ProxyPassword    *string
 	EndpointOverride *string
 	LogLevel         *string
+	SettingsFile     *string
 }
 
 func ensurePrimaryAccess(s *state.Settings) {
@@ -74,13 +75,26 @@ func Load(dirs state.Dirs, overrides Overrides) (state.Settings, error) {
 	// 1. Start from defaults.
 	s := state.DefaultSettings()
 
-	// 2. Overlay persisted file.
+	// 2. Overlay persisted file from the durable data dir when present.
 	persisted, err := state.LoadSettings(dirs)
 	if err != nil && !errors.Is(err, state.ErrNotFound) {
 		return s, fmt.Errorf("load persisted settings: %w", err)
 	}
 	if err == nil {
 		applyPersisted(&s, persisted)
+	}
+
+	// 2.5. Optionally overlay a standalone settings file.
+	settingsFile := os.Getenv("CFWARP_SETTINGS_FILE")
+	if overrides.SettingsFile != nil {
+		settingsFile = strings.TrimSpace(*overrides.SettingsFile)
+	}
+	if settingsFile != "" {
+		external, err := state.LoadSettingsFile(settingsFile)
+		if err != nil {
+			return s, fmt.Errorf("load settings file %s: %w", settingsFile, err)
+		}
+		applyPersisted(&s, external)
 	}
 
 	// 3. Overlay env vars.

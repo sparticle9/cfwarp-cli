@@ -4,8 +4,8 @@
 
 This design defines the first implementation path for `cfwarp-cli`:
 
-- **Linux-first**
-- **Docker-first deployment**
+- **support Linux and macOS on Apple Silicon, with broader platform support expected later**
+- **prioritize Docker deployment for the initial milestone**
 - **explicit proxy mode first**
 - **WireGuard-based userspace backend first**
 - **direct Cloudflare registration owned by this project**

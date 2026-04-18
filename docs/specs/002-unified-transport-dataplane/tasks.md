@@ -66,7 +66,7 @@
   - Add regression tests so the current WireGuard MVP behavior remains stable while native MASQUE work lands incrementally.
   - Requirements/design refs: legacy backend coexistence, migration summary step 6.
 
-- [x] 12. Update Alpine-first packaging, build, and integration coverage for the new runtime layout.
+- [x] 12. Update primary packaging, build, and integration coverage for the new runtime layout.
   - Consolidate packaging around Alpine as the only target in this phase, including the native runtime path and any retained legacy backend dependencies.
   - Update Dockerfile and compose examples so Alpine remains the canonical deployment target while native MASQUE support is introduced.
   - Add opt-in integration tests for Alpine image build, native MASQUE startup smoke coverage, and preserved `singbox-wireguard` behavior.
