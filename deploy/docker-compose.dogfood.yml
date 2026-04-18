@@ -3,6 +3,10 @@ services:
     image: ${CFWARP_IMAGE:-ghcr.io/sparticle9/cfwarp-cli:latest}
     container_name: cfwarp-warp
     restart: unless-stopped
+    user: "1000"
+    command:
+      - --state-dir
+      - ${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     ports:
       - 127.0.0.1:${CFWARP_WIREGUARD_PORT:-16080}:1080
     environment:
@@ -14,10 +18,13 @@ services:
     image: ${CFWARP_IMAGE:-ghcr.io/sparticle9/cfwarp-cli:latest}
     container_name: cfwarp-masque
     restart: unless-stopped
+    user: "1000"
+    command:
+      - --state-dir
+      - ${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     ports:
       - 127.0.0.1:${CFWARP_MASQUE_PORT:-16081}:1080
     environment:
       CFWARP_STATE_DIR: ${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     volumes:
       - ${CFWARP_MASQUE_DATA_DIR:-./state/masque}:${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
-

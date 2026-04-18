@@ -32,6 +32,8 @@
     cfwarp_masque_state_dir: /home/cfwarp/.local/state/cfwarp-cli
     cfwarp_wireguard_data_dir: "{{ compose_dir }}/state/wireguard"
     cfwarp_masque_data_dir: "{{ compose_dir }}/state/masque"
+    cfwarp_runtime_uid: "1000"
+    cfwarp_runtime_gid: "1000"
     cfwarp_log_level: info
     cfwarp_masque_sni: ""
     cfwarp_masque_use_ipv6: ""
@@ -211,6 +213,16 @@
         - "{{ cfwarp_wireguard_data_dir }}"
         - "{{ cfwarp_masque_data_dir }}"
 
+    - name: Recreate runtime directories with container UID
+      ansible.builtin.file:
+        path: "{{ item }}/run"
+        state: directory
+        owner: "{{ cfwarp_runtime_uid }}"
+        group: "{{ cfwarp_runtime_gid }}"
+        mode: "0700"
+      loop:
+        - "{{ cfwarp_wireguard_data_dir }}"
+        - "{{ cfwarp_masque_data_dir }}"
     - name: Remove incompatible MASQUE account state when MASQUE enrollment is missing
       ansible.builtin.shell: |
         set -uo pipefail
