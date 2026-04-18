@@ -139,6 +139,41 @@ func TestValidate_InvalidEndpointOverride(t *testing.T) {
 	}
 }
 
+func TestValidate_DNSHTTPSValid(t *testing.T) {
+	s := validSettings()
+	s.DNS = &state.DNSOptions{Mode: "https", Server: "1.1.1.1", Strategy: "ipv4_only"}
+	if err := settings.Validate(s); err != nil {
+		t.Errorf("expected dns https settings to be valid, got: %v", err)
+	}
+}
+
+func TestValidate_DNSLocalRejectsServer(t *testing.T) {
+	s := validSettings()
+	s.DNS = &state.DNSOptions{Mode: "local", Server: "1.1.1.1"}
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "dns.server") {
+		t.Errorf("expected dns.server error, got: %v", err)
+	}
+}
+
+func TestValidate_DNSHTTPSRequiresServer(t *testing.T) {
+	s := validSettings()
+	s.DNS = &state.DNSOptions{Mode: "https"}
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "dns.server") {
+		t.Errorf("expected dns.server error, got: %v", err)
+	}
+}
+
+func TestValidate_DNSInvalidStrategy(t *testing.T) {
+	s := validSettings()
+	s.DNS = &state.DNSOptions{Mode: "https", Server: "1.1.1.1", Strategy: "round_robin"}
+	err := settings.Validate(s)
+	if err == nil || !strings.Contains(err.Error(), "dns.strategy") {
+		t.Errorf("expected dns.strategy error, got: %v", err)
+	}
+}
+
 func TestValidate_RotationDistinctnessValid(t *testing.T) {
 	s := validSettings()
 	s.Rotation = &state.RotationOptions{

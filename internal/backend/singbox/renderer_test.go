@@ -59,6 +59,10 @@ func TestRender_NoAuth_DefaultEndpoint(t *testing.T) {
 		t.Errorf("expected log.timestamp=true")
 	}
 
+	if _, ok := m["dns"]; ok {
+		t.Fatalf("expected no dns block by default, got %v", m["dns"])
+	}
+
 	// inbound: socks
 	inbounds := m["inbounds"].([]any)
 	if len(inbounds) != 1 {
@@ -94,6 +98,9 @@ func TestRender_NoAuth_DefaultEndpoint(t *testing.T) {
 	}
 	if ep["private_key"] != "privKeyBase64==" {
 		t.Errorf("expected private_key, got %v", ep["private_key"])
+	}
+	if _, ok := ep["domain_resolver"]; ok {
+		t.Errorf("expected no endpoint domain_resolver by default, got %v", ep["domain_resolver"])
 	}
 
 	addrs := ep["address"].([]any)
@@ -134,6 +141,61 @@ func TestRender_NoAuth_DefaultEndpoint(t *testing.T) {
 	route := m["route"].(map[string]any)
 	if route["final"] != "wg-ep" {
 		t.Errorf("expected route.final=wg-ep, got %v", route["final"])
+	}
+	if _, ok := route["default_domain_resolver"]; ok {
+		t.Errorf("expected no route.default_domain_resolver by default, got %v", route["default_domain_resolver"])
+	}
+	if _, ok := route["rules"]; ok {
+		t.Errorf("expected no route.rules by default, got %v", route["rules"])
+	}
+}
+
+func TestRender_CustomDNSHTTPS(t *testing.T) {
+	s := baseSettings()
+	s.DNS = &state.DNSOptions{
+		Mode:     "https",
+		Server:   "1.1.1.1",
+		Strategy: "ipv4_only",
+	}
+
+	data, err := singbox.Render(backend.RenderInput{Account: baseAccount(), Settings: s})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	m := parseConfig(t, data)
+
+	dns := m["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("expected 1 dns server, got %d", len(servers))
+	}
+	server := servers[0].(map[string]any)
+	if server["type"] != "https" || server["tag"] != "dns-custom" || server["server"] != "1.1.1.1" {
+		t.Fatalf("unexpected dns server: %v", server)
+	}
+	if server["server_port"] != float64(443) || server["path"] != "/dns-query" {
+		t.Fatalf("expected default https resolver port/path, got %v", server)
+	}
+	if dns["strategy"] != "ipv4_only" {
+		t.Fatalf("expected dns.strategy=ipv4_only, got %v", dns["strategy"])
+	}
+
+	ep := m["endpoints"].([]any)[0].(map[string]any)
+	if ep["domain_resolver"] != "dns-custom" {
+		t.Fatalf("expected endpoint domain_resolver dns-custom, got %v", ep["domain_resolver"])
+	}
+
+	route := m["route"].(map[string]any)
+	if route["default_domain_resolver"] != "dns-custom" {
+		t.Fatalf("expected route.default_domain_resolver dns-custom, got %v", route["default_domain_resolver"])
+	}
+	rules := route["rules"].([]any)
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 route rule, got %d", len(rules))
+	}
+	rule := rules[0].(map[string]any)
+	if rule["action"] != "resolve" || rule["server"] != "dns-custom" || rule["strategy"] != "ipv4_only" {
+		t.Fatalf("unexpected route rule: %v", rule)
 	}
 }
 

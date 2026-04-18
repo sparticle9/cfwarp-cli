@@ -179,6 +179,42 @@ Example `settings.json` for the stable WireGuard lane:
 }
 ```
 
+Optional explicit DNS policy for environments where system DNS is intercepted or fake-IP translated:
+
+```json
+{
+  "runtime_family": "legacy",
+  "transport": "wireguard",
+  "access": [
+    {
+      "type": "socks5",
+      "listen_host": "127.0.0.1",
+      "listen_port": 1080
+    }
+  ],
+  "dns": {
+    "mode": "https",
+    "server": "1.1.1.1",
+    "strategy": "ipv4_only"
+  }
+}
+```
+
+Supported `dns.mode` values today:
+
+- `local`
+- `udp`
+- `https`
+
+For `https`, the default port/path are `443` and `/dns-query`.
+Useful env vars for container workflows:
+
+- `CFWARP_DNS_MODE`
+- `CFWARP_DNS_SERVER`
+- `CFWARP_DNS_SERVER_PORT`
+- `CFWARP_DNS_PATH`
+- `CFWARP_DNS_STRATEGY`
+
 ### 4. Validate the resolved config
 
 With a standalone settings file:

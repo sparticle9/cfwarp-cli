@@ -17,6 +17,8 @@ const (
 	wgMTU               = 1280
 	wgKeepalive         = 25
 	wgTag               = "wg-ep"
+	localDNSTag         = "local"
+	customDNSTag        = "dns-custom"
 )
 
 // Render builds the sing-box JSON config from the provided RenderInput.
@@ -37,20 +39,20 @@ func Render(input backend.RenderInput) ([]byte, error) {
 		return nil, err
 	}
 
+	dnsCfg, resolverTag := buildDNSConfig(input.Settings.DNS)
 	cfg := singboxConfig{
-		Log: logConfig{
-			Level:     input.Settings.LogLevel,
-			Timestamp: true,
-		},
+		Log:      buildLogConfig(input.Settings.LogLevel),
+		DNS:      dnsCfg,
 		Inbounds: inbounds,
 		Endpoints: []wgEndpoint{
 			{
-				Type:       "wireguard",
-				Tag:        wgTag,
-				System:     false,
-				MTU:        wgMTU,
-				Address:    localAddrs,
-				PrivateKey: input.Account.WARPPrivateKey,
+				Type:           "wireguard",
+				Tag:            wgTag,
+				System:         false,
+				MTU:            wgMTU,
+				Address:        localAddrs,
+				PrivateKey:     input.Account.WARPPrivateKey,
+				DomainResolver: resolverTag,
 				Peers: []wgPeer{
 					{
 						Address:                     peerAddr,
@@ -64,7 +66,9 @@ func Render(input backend.RenderInput) ([]byte, error) {
 			},
 		},
 		Route: routeConfig{
-			Final: wgTag,
+			Rules:                 buildRouteRules(resolverTag, input.Settings.DNS),
+			Final:                 wgTag,
+			DefaultDomainResolver: resolverTag,
 		},
 	}
 
@@ -73,6 +77,48 @@ func Render(input backend.RenderInput) ([]byte, error) {
 		return nil, fmt.Errorf("marshal sing-box config: %w", err)
 	}
 	return data, nil
+}
+
+func buildLogConfig(level string) logConfig {
+	if level == "" {
+		level = "info"
+	}
+	return logConfig{Level: level, Timestamp: true}
+}
+
+func buildDNSConfig(opts *state.DNSOptions) (*dnsConfig, string) {
+	if opts == nil || opts.Mode == "" {
+		return nil, ""
+	}
+	server := dnsServer{Type: opts.Mode}
+	resolverTag := localDNSTag
+	if opts.Mode != "local" {
+		resolverTag = customDNSTag
+		server.Server = opts.Server
+		server.ServerPort = opts.ServerPort
+		if opts.Mode == "https" {
+			server.Path = opts.Path
+		}
+		return &dnsConfig{Servers: []dnsServer{{
+			Type:       server.Type,
+			Tag:        resolverTag,
+			Server:     server.Server,
+			ServerPort: server.ServerPort,
+			Path:       server.Path,
+		}}, Strategy: opts.Strategy}, resolverTag
+	}
+	return &dnsConfig{Servers: []dnsServer{{Type: server.Type, Tag: resolverTag}}, Strategy: opts.Strategy}, resolverTag
+}
+
+func buildRouteRules(resolverTag string, opts *state.DNSOptions) []routeRule {
+	if resolverTag == "" {
+		return nil
+	}
+	rule := routeRule{Action: "resolve", Server: resolverTag}
+	if opts != nil {
+		rule.Strategy = opts.Strategy
+	}
+	return []routeRule{rule}
 }
 
 // resolvePeerEndpoint returns the peer host and port to use, applying override if set.

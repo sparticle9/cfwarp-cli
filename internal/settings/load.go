@@ -162,6 +162,9 @@ func applyPersisted(s *state.Settings, p state.Settings) {
 	if p.Caps != nil {
 		s.Caps = p.Caps
 	}
+	if p.DNS != nil {
+		s.DNS = p.DNS
+	}
 	if p.Rotation != nil {
 		s.Rotation = p.Rotation
 	}
@@ -218,6 +221,7 @@ func applyEnv(s *state.Settings) {
 	}
 	applyMasqueEnv(s)
 	applyCapsEnv(s)
+	applyDNSEnv(s)
 	applyRotationEnv(s)
 	applyDaemonEnv(s)
 	if legacyAccessTouched {
@@ -302,6 +306,35 @@ func applyCapsEnv(s *state.Settings) {
 			checks = append(checks, state.CapCheck{Probe: probe, RotateOnFail: true, TimeoutSeconds: 15})
 		}
 		ensureCaps().Checks = checks
+	}
+}
+
+func applyDNSEnv(s *state.Settings) {
+	ensureDNS := func() *state.DNSOptions {
+		if s.DNS == nil {
+			s.DNS = &state.DNSOptions{}
+		}
+		return s.DNS
+	}
+	if v := os.Getenv("CFWARP_DNS_MODE"); v != "" {
+		ensureDNS().Mode = v
+	}
+	if v := os.Getenv("CFWARP_DNS_SERVER"); v != "" {
+		ensureDNS().Server = v
+	}
+	if v := os.Getenv("CFWARP_DNS_SERVER_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			ensureDNS().ServerPort = p
+		}
+	}
+	if v := os.Getenv("CFWARP_DNS_PATH"); v != "" {
+		ensureDNS().Path = v
+	}
+	if v := os.Getenv("CFWARP_DNS_STRATEGY"); v != "" {
+		ensureDNS().Strategy = v
+	}
+	if s.DNS != nil && s.DNS.Mode == "" && s.DNS.Server == "" && s.DNS.ServerPort == 0 && s.DNS.Path == "" && s.DNS.Strategy == "" {
+		s.DNS = nil
 	}
 }
 

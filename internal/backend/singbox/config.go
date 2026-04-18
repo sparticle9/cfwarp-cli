@@ -5,10 +5,11 @@ package singbox
 
 // singboxConfig is the top-level sing-box configuration structure (v1.13+).
 type singboxConfig struct {
-	Log       logConfig        `json:"log"`
-	Inbounds  []inbound        `json:"inbounds"`
-	Endpoints []wgEndpoint     `json:"endpoints"`
-	Route     routeConfig      `json:"route"`
+	Log       logConfig    `json:"log"`
+	DNS       *dnsConfig   `json:"dns,omitempty"`
+	Inbounds  []inbound    `json:"inbounds"`
+	Endpoints []wgEndpoint `json:"endpoints"`
+	Route     routeConfig  `json:"route"`
 }
 
 // logConfig configures sing-box logging.
@@ -19,11 +20,11 @@ type logConfig struct {
 
 // inbound represents a proxy listener (socks or http).
 type inbound struct {
-	Type       string  `json:"type"`
-	Tag        string  `json:"tag"`
-	Listen     string  `json:"listen"`
-	ListenPort int     `json:"listen_port"`
-	Users      []user  `json:"users"` // empty slice = no auth
+	Type       string `json:"type"`
+	Tag        string `json:"tag"`
+	Listen     string `json:"listen"`
+	ListenPort int    `json:"listen_port"`
+	Users      []user `json:"users"` // empty slice = no auth
 }
 
 // user is a proxy auth credential pair.
@@ -34,26 +35,49 @@ type user struct {
 
 // wgEndpoint is the sing-box 1.13 WireGuard endpoint (replaces outbound).
 type wgEndpoint struct {
-	Type       string   `json:"type"`
-	Tag        string   `json:"tag"`
-	System     bool     `json:"system"`      // false = userspace (no NET_ADMIN)
-	MTU        int      `json:"mtu"`
-	Address    []string `json:"address"`     // local WARP-assigned addresses with prefix length
-	PrivateKey string   `json:"private_key"`
-	Peers      []wgPeer `json:"peers"`
+	Type           string   `json:"type"`
+	Tag            string   `json:"tag"`
+	System         bool     `json:"system"` // false = userspace (no NET_ADMIN)
+	MTU            int      `json:"mtu"`
+	Address        []string `json:"address"` // local WARP-assigned addresses with prefix length
+	PrivateKey     string   `json:"private_key"`
+	DomainResolver string   `json:"domain_resolver,omitempty"`
+	Peers          []wgPeer `json:"peers"`
 }
 
 // wgPeer configures the Cloudflare WARP peer.
 type wgPeer struct {
-	Address                  string `json:"address"`
-	Port                     int    `json:"port"`
-	PublicKey                string `json:"public_key"`
-	AllowedIPs               []string `json:"allowed_ips"`
-	PersistentKeepaliveInterval int  `json:"persistent_keepalive_interval"`
-	Reserved                 [3]int `json:"reserved"`
+	Address                     string   `json:"address"`
+	Port                        int      `json:"port"`
+	PublicKey                   string   `json:"public_key"`
+	AllowedIPs                  []string `json:"allowed_ips"`
+	PersistentKeepaliveInterval int      `json:"persistent_keepalive_interval"`
+	Reserved                    [3]int   `json:"reserved"`
+}
+
+type dnsConfig struct {
+	Servers  []dnsServer `json:"servers,omitempty"`
+	Strategy string      `json:"strategy,omitempty"`
+}
+
+type dnsServer struct {
+	Type       string `json:"type"`
+	Tag        string `json:"tag,omitempty"`
+	PreferGo   bool   `json:"prefer_go,omitempty"`
+	Server     string `json:"server,omitempty"`
+	ServerPort int    `json:"server_port,omitempty"`
+	Path       string `json:"path,omitempty"`
+}
+
+type routeRule struct {
+	Action   string `json:"action"`
+	Server   string `json:"server,omitempty"`
+	Strategy string `json:"strategy,omitempty"`
 }
 
 // routeConfig tells sing-box which endpoint handles all traffic.
 type routeConfig struct {
-	Final string `json:"final"`
+	Rules                 []routeRule `json:"rules,omitempty"`
+	Final                 string      `json:"final"`
+	DefaultDomainResolver string      `json:"default_domain_resolver,omitempty"`
 }

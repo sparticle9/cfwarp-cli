@@ -8,7 +8,7 @@ import (
 
 const (
 	CurrentAccountSchemaVersion  = 2
-	CurrentSettingsSchemaVersion = 3
+	CurrentSettingsSchemaVersion = 4
 	CurrentRuntimeSchemaVersion  = 3
 
 	RuntimeFamilyLegacy = "legacy"
@@ -194,6 +194,15 @@ type CapsOptions struct {
 	Checks          []CapCheck `json:"checks,omitempty"`
 }
 
+// DNSOptions configures explicit DNS resolution for the sing-box WireGuard lane.
+type DNSOptions struct {
+	Mode       string `json:"mode,omitempty"`
+	Server     string `json:"server,omitempty"`
+	ServerPort int    `json:"server_port,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Strategy   string `json:"strategy,omitempty"`
+}
+
 // RotationOptions controls how the daemon remediates failed capability probes.
 type RotationOptions struct {
 	Enabled                bool   `json:"enabled,omitempty"`
@@ -227,6 +236,7 @@ type Settings struct {
 	MasqueOptions    *MasqueOptions   `json:"-"`
 	Access           []AccessConfig   `json:"-"`
 	Caps             *CapsOptions     `json:"-"`
+	DNS              *DNSOptions      `json:"-"`
 	Rotation         *RotationOptions `json:"-"`
 	Daemon           *DaemonOptions   `json:"-"`
 
@@ -250,6 +260,7 @@ type settingsJSON struct {
 	MasqueOptions    *MasqueOptions   `json:"masque_options,omitempty"`
 	Access           []AccessConfig   `json:"access,omitempty"`
 	Caps             *CapsOptions     `json:"caps,omitempty"`
+	DNS              *DNSOptions      `json:"dns,omitempty"`
 	Rotation         *RotationOptions `json:"rotation,omitempty"`
 	Daemon           *DaemonOptions   `json:"daemon,omitempty"`
 	Backend          string           `json:"backend,omitempty"`
@@ -327,6 +338,22 @@ func (s *Settings) Normalize() {
 			}
 		}
 	}
+	if s.DNS != nil {
+		s.DNS.Mode = strings.ToLower(strings.TrimSpace(s.DNS.Mode))
+		s.DNS.Strategy = strings.ToLower(strings.TrimSpace(s.DNS.Strategy))
+		if s.DNS.Mode == "https" {
+			if s.DNS.ServerPort == 0 {
+				s.DNS.ServerPort = 443
+			}
+			if s.DNS.Path == "" {
+				s.DNS.Path = "/dns-query"
+			}
+		} else if s.DNS.Mode == "udp" {
+			if s.DNS.ServerPort == 0 {
+				s.DNS.ServerPort = 53
+			}
+		}
+	}
 	if s.Rotation != nil {
 		s.Rotation.Distinctness = strings.ToLower(strings.TrimSpace(s.Rotation.Distinctness))
 		if s.Rotation.Enabled {
@@ -400,6 +427,10 @@ func accessMatchesLegacy(s Settings) bool {
 		access.MTU == 0
 }
 
+func zeroDNS(o *DNSOptions) bool {
+	return o == nil || (o.Mode == "" && o.Server == "" && o.ServerPort == 0 && o.Path == "" && o.Strategy == "")
+}
+
 func zeroRotation(o *RotationOptions) bool {
 	return o == nil || (!o.Enabled && o.MaxAttemptsPerIncident == 0 && o.SettleTimeSeconds == 0 && o.CooldownSeconds == 0 && !o.RestoreLastGood && !o.EnrollMasque && o.Distinctness == "" && o.HistorySize == 0)
 }
@@ -425,6 +456,9 @@ func (s Settings) MarshalJSON() ([]byte, error) {
 		LogLevel:         ss.LogLevel,
 		MasqueOptions:    ss.MasqueOptions,
 		Caps:             ss.Caps,
+	}
+	if !zeroDNS(ss.DNS) {
+		payload.DNS = ss.DNS
 	}
 	if !accessMatchesLegacy(ss) {
 		payload.Access = ss.Access
@@ -488,6 +522,11 @@ func (s *Settings) UnmarshalJSON(data []byte) error {
 	}
 	if raw.Caps != nil {
 		s.Caps = raw.Caps
+	}
+	if raw.DNS != nil {
+		s.DNS = raw.DNS
+	} else {
+		s.DNS = nil
 	}
 	if raw.Rotation != nil {
 		s.Rotation = raw.Rotation

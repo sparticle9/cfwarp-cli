@@ -39,6 +39,19 @@ var validCapProbes = map[string]bool{
 	"chatgpt":  true,
 }
 
+var validDNSModes = map[string]bool{
+	"local": true,
+	"udp":   true,
+	"https": true,
+}
+
+var validDNSStrategies = map[string]bool{
+	"prefer_ipv4": true,
+	"prefer_ipv6": true,
+	"ipv4_only":   true,
+	"ipv6_only":   true,
+}
+
 var validRotationDistinctness = map[string]bool{
 	state.RotationDistinctnessEither: true,
 	state.RotationDistinctnessIPv4:   true,
@@ -124,6 +137,37 @@ func Validate(s state.Settings) error {
 			}
 			if check.TimeoutSeconds <= 0 {
 				return fmt.Errorf("invalid caps.checks[%d].timeout_seconds %d: must be > 0", i, check.TimeoutSeconds)
+			}
+		}
+	}
+
+	if s.DNS != nil {
+		if !validDNSModes[s.DNS.Mode] {
+			return fmt.Errorf("invalid dns.mode %q: must be one of %v", s.DNS.Mode, keys(validDNSModes))
+		}
+		if s.DNS.Strategy != "" && !validDNSStrategies[s.DNS.Strategy] {
+			return fmt.Errorf("invalid dns.strategy %q: must be one of %v", s.DNS.Strategy, keys(validDNSStrategies))
+		}
+		switch s.DNS.Mode {
+		case "local":
+			if s.DNS.Server != "" {
+				return fmt.Errorf("dns.server is not supported when dns.mode=%q", s.DNS.Mode)
+			}
+			if s.DNS.ServerPort != 0 {
+				return fmt.Errorf("dns.server_port is not supported when dns.mode=%q", s.DNS.Mode)
+			}
+			if s.DNS.Path != "" {
+				return fmt.Errorf("dns.path is not supported when dns.mode=%q", s.DNS.Mode)
+			}
+		case "udp", "https":
+			if strings.TrimSpace(s.DNS.Server) == "" {
+				return fmt.Errorf("dns.server is required when dns.mode=%q", s.DNS.Mode)
+			}
+			if s.DNS.ServerPort < 0 || s.DNS.ServerPort > 65535 {
+				return fmt.Errorf("invalid dns.server_port %d: must be 1–65535 when set", s.DNS.ServerPort)
+			}
+			if s.DNS.Mode == "udp" && s.DNS.Path != "" {
+				return fmt.Errorf("dns.path is only supported when dns.mode=%q", "https")
 			}
 		}
 	}

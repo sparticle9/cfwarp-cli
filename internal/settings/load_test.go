@@ -99,6 +99,7 @@ func TestLoad_StandaloneSettingsFile_OverridesPersisted(t *testing.T) {
 	external.ListenPort = 7070
 	external.LogLevel = "debug"
 	external.Mode = state.ModeHTTP
+	external.DNS = &state.DNSOptions{Mode: "https", Server: "1.1.1.1", Strategy: "ipv4_only"}
 	externalPath := filepath.Join(t.TempDir(), "settings.json")
 	data, _ := json.Marshal(external)
 	if err := os.WriteFile(externalPath, data, 0o600); err != nil {
@@ -111,6 +112,9 @@ func TestLoad_StandaloneSettingsFile_OverridesPersisted(t *testing.T) {
 	}
 	if s.ListenPort != 7070 || s.LogLevel != "debug" || s.Mode != state.ModeHTTP {
 		t.Fatalf("expected standalone settings file to win, got %+v", s)
+	}
+	if s.DNS == nil || s.DNS.Mode != "https" || s.DNS.Server != "1.1.1.1" || s.DNS.ServerPort != 443 || s.DNS.Path != "/dns-query" {
+		t.Fatalf("expected standalone dns settings to load, got %+v", s.DNS)
 	}
 }
 
@@ -197,6 +201,24 @@ func TestLoad_EnvRuntimeSelection(t *testing.T) {
 	}
 	if s.RuntimeFamily != state.RuntimeFamilyLegacy || s.Transport != state.TransportWireGuard || s.Mode != state.ModeHTTP {
 		t.Errorf("expected env runtime selection to be normalised, got %+v", s)
+	}
+}
+
+func TestLoad_EnvDNS(t *testing.T) {
+	d := tempDirs(t)
+	t.Setenv("CFWARP_DNS_MODE", "HTTPS")
+	t.Setenv("CFWARP_DNS_SERVER", "1.1.1.1")
+	t.Setenv("CFWARP_DNS_STRATEGY", "IPV4_ONLY")
+
+	s, err := settings.Load(d, settings.Overrides{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s.DNS == nil {
+		t.Fatalf("expected dns settings from env")
+	}
+	if s.DNS.Mode != "https" || s.DNS.Server != "1.1.1.1" || s.DNS.ServerPort != 443 || s.DNS.Path != "/dns-query" || s.DNS.Strategy != "ipv4_only" {
+		t.Fatalf("unexpected env dns settings: %+v", s.DNS)
 	}
 }
 
