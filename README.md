@@ -291,6 +291,16 @@ Useful env vars for container workflows:
 - `CFWARP_DNS_PATH`
 - `CFWARP_DNS_STRATEGY`
 
+> **Sidenote / local caveat (complex NAT, transparent proxy, fake-IP, multi-hop networks):**
+> If your host/proxy path rewrites DNS responses (for example Clash Meta fake-IP), Cloudflare domains may resolve to synthetic `198.18.x.x` addresses and `cfwarp-cli status --trace` or speed checks can timeout even when the proxy process is otherwise healthy. You can usually work around this **without changing router behavior** by forcing explicit upstream DNS for the cfwarp session:
+>
+> - `CFWARP_DNS_MODE=https`
+> - `CFWARP_DNS_SERVER=1.1.1.1`
+> - `CFWARP_DNS_SERVER_PORT=443`
+> - `CFWARP_DNS_PATH=/dns-query`
+>
+> Then restart/re-run and verify with `cfwarp-cli status --json --trace` before starting heavier checks. This is especially useful for local macOS tests or hosts behind multiple NAT layers.
+
 ### 4. Validate the resolved config
 
 With a standalone settings file:
