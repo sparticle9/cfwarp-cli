@@ -1,7 +1,7 @@
 ---
 # Expects: variant.name, bench_ts, k6_profile, bench_ip, api_port
 
-- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Start k6 docker stats sampler"
+- name: "Start k6 docker stats sampler {{ variant.name }} / {{ k6_profile.profile }}"
   ansible.builtin.shell: |
     pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.profile }}-sampler.pid
     statefile=/tmp/docker-stats-cfwarp-bench-{{ variant.name }}-k6-{{ k6_profile.profile }}.state
@@ -10,9 +10,9 @@
     echo $! > "$pidfile"
   changed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Run k6 workload"
+- name: "Run k6 workload {{ variant.name }} / {{ k6_profile.profile }}"
   block:
-    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Execute k6"
+    - name: "Execute k6 {{ variant.name }} / {{ k6_profile.profile }}"
       ansible.builtin.shell: |
         timeout 120s docker run --rm \
           --network container:cfwarp-bench-{{ variant.name }} \
@@ -32,17 +32,17 @@
       async: 180
       poll: 5
   rescue:
-    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Dump container logs after k6 failure"
+    - name: "Dump container logs after k6 failure {{ variant.name }} / {{ k6_profile.profile }}"
       ansible.builtin.shell: docker logs --tail 200 cfwarp-bench-{{ variant.name }} 2>&1 || true
       register: _k6_logs
       changed_when: false
       failed_when: false
 
-    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Show k6 failure logs"
+    - name: "Show k6 failure logs {{ variant.name }} / {{ k6_profile.profile }}"
       ansible.builtin.debug:
         msg: "{{ _k6_logs.stdout }}"
 
-    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Stop sampler after k6 failure"
+    - name: "Stop sampler after k6 failure {{ variant.name }} / {{ k6_profile.profile }}"
       ansible.builtin.shell: |
         pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.profile }}-sampler.pid
         if [ -f "$pidfile" ]; then
@@ -54,11 +54,11 @@
       changed_when: false
       failed_when: false
 
-    - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Fail k6 phase"
+    - name: "Fail k6 phase {{ variant.name }} / {{ k6_profile.profile }}"
       ansible.builtin.fail:
         msg: "k6 workload failed for {{ variant.name }} / {{ k6_profile.profile }}"
 
-- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Append k6 summary row"
+- name: "Append k6 summary row {{ variant.name }} / {{ k6_profile.profile }}"
   ansible.builtin.shell: |
     python3 - <<'PY'
     import json
@@ -99,7 +99,7 @@
     PY
   changed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Assert k6 error rate acceptable"
+- name: "Assert k6 error rate acceptable {{ variant.name }} / {{ k6_profile.profile }}"
   ansible.builtin.shell: |
     python3 - <<'PY'
     import json
@@ -111,7 +111,7 @@
     PY
   changed_when: false
 
-- name: "[{{ variant.name }}][{{ k6_profile.profile }}] Stop k6 docker stats sampler"
+- name: "Stop k6 docker stats sampler {{ variant.name }} / {{ k6_profile.profile }}"
   ansible.builtin.shell: |
     pidfile=/tmp/bench-{{ bench_ts }}/{{ variant.name }}-k6-{{ k6_profile.profile }}-sampler.pid
     if [ -f "$pidfile" ]; then

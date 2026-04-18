@@ -24,6 +24,7 @@
     image_revision_expected: ""
     test_root: "/tmp/cfwarp-fulltest"
     cfwarp_container_state_dir: "/tmp/cfwarp-state"
+    probe_timeout_seconds: 10
     cases:
       - name: legacy
         container_name: cfwarp-legacy-fulltest
@@ -125,6 +126,8 @@
         initial_wait={{ item.initial_wait_seconds | int }}
         probe_attempts={{ item.probe_attempts | int }}
         probe_delay={{ item.probe_delay_seconds | int }}
+        probe_timeout={{ probe_timeout_seconds | int }}
+        proxy_kind={{ item.proxy_kind | default('socks5') | quote }}
 
         cleanup() {
           docker rm -f "$name" >/dev/null 2>&1 || true
@@ -154,8 +157,8 @@
             probe=1
             while [ "$probe" -le "$probe_attempts" ]; do
               echo "-- trace probe ${probe} --"
-              if [ {{ item.proxy_kind | quote }} = "http" ]; then
-                if out=$(curl -fsSL -x "http://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace); then
+              if [ "$proxy_kind" = "http" ]; then
+                if out=$(curl --max-time "$probe_timeout" --connect-timeout 5 -fsSL -x "http://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace); then
                   printf '%s\n' "$out"
                   if printf '%s\n' "$out" | grep -q '^warp=on$'; then
                     echo "PASS {{ item.name }}"
@@ -163,7 +166,7 @@
                   fi
                 fi
               else
-                if out=$(curl -fsSL --proxy "socks5h://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace); then
+                if out=$(curl --max-time "$probe_timeout" --connect-timeout 5 -fsSL --proxy "socks5h://127.0.0.1:${host_port}" https://www.cloudflare.com/cdn-cgi/trace); then
                   printf '%s\n' "$out"
                   if printf '%s\n' "$out" | grep -q '^warp=on$'; then
                     echo "PASS {{ item.name }}"

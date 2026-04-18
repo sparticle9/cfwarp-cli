@@ -197,15 +197,24 @@
         state: directory
         mode: "0755"
 
-    - name: Resolve remote benchmark target host
+    - name: Default remote benchmark target host
+      ansible.builtin.set_fact:
+        protocol_real_target_host: "127.0.0.1"
+        protocol_real_target_iperf3_port: "15251"
+        protocol_real_target_http_port: "18180"
+
+    - name: Resolve remote benchmark target host from bench_server group
       ansible.builtin.set_fact:
         protocol_real_target_host: >-
           {{ hostvars[groups['bench_server'][0]].get(
             'ansible_host',
             lookup('pipe', 'ssh -G ' ~ groups['bench_server'][0] ~ " | awk '/^hostname /{print $2}'")
           ) }}
-        protocol_real_target_iperf3_port: "{{ hostvars[groups['bench_server'][0]].get('protocol_real_iperf3_port', '15251') }}"
-        protocol_real_target_http_port: "{{ hostvars[groups['bench_server'][0]].get('protocol_real_http_port', '18180') }}"
+        protocol_real_target_iperf3_port: >-
+          {{ hostvars[groups['bench_server'][0]].get('protocol_real_iperf3_port', '15251') }}
+        protocol_real_target_http_port: >-
+          {{ hostvars[groups['bench_server'][0]].get('protocol_real_http_port', '18180') }}
+      when: groups.get('bench_server', []) | length > 0
 
     - name: Capture current UDP socket buffer sysctls
       ansible.builtin.shell: |
