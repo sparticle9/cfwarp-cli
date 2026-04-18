@@ -3,8 +3,8 @@
 This is a practical command reference for Linux usage. It covers command names, common flags, and copy/paste workflows.
 
 > For quick start workflows (local tmux + remote Linux), also see:
-> - `../.pi/agent/skills/cfwarp-local-remote-ops/SKILL.md`
-> - `../.pi/agent/skills/cfwarp-local-remote-ops/references/cli-command-reference.md`
+> - `../.agents/skills/cfwarp-local-remote-ops/SKILL.md`
+> - `../.agents/skills/cfwarp-local-remote-ops/references/cli-command-reference.md`
 
 ## Common form
 
@@ -143,5 +143,5 @@ cfwarp-cli completion bash --init-file ~/.bashrc.local
 ## What to keep in docs vs in scripts
 
 - **Command reference doc (this file):** stable command list, flags, and examples.
-- **Skill docs (`.pi/...`):** onboarding flow, tmux wrapper scripts, and environment-specific operations.
+- **Skill docs (`.agents/...`):** onboarding flow, tmux wrapper scripts, and environment-specific operations.
 - **docs/README.md:** discovery index to both of the above.

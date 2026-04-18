@@ -21,10 +21,10 @@ Start here:
   - dual WireGuard / MASQUE localhost proxies
   - sing-box fragment integration
   - on-demand status workflow
-- `../.pi/agent/skills/cfwarp-local-remote-ops/SKILL.md`
+- `../.agents/skills/cfwarp-local-remote-ops/SKILL.md`
   - local tmux-based deploy/ops workflow
   - local vs remote Linux runbook
-- `../.pi/agent/skills/cfwarp-local-remote-ops/references/cli-command-reference.md`
+- `../.agents/skills/cfwarp-local-remote-ops/references/cli-command-reference.md`
   - copy/paste CLI command reference for local and remote quick start
 - `cli-reference.md`
   - Linux command reference and command matrix

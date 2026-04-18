@@ -20,8 +20,8 @@ That file is the primary command checklist for local + remote usage.
 
 Use the scripts in `scripts/` when you want short one-command entry points:
 
-- `.pi/agent/skills/cfwarp-local-remote-ops/scripts/local-tmux.sh start`
-- `.pi/agent/skills/cfwarp-local-remote-ops/scripts/remote-linux.sh deploy`
+- `.agents/skills/cfwarp-local-remote-ops/scripts/local-tmux.sh start`
+- `.agents/skills/cfwarp-local-remote-ops/scripts/remote-linux.sh deploy`
 
 ## Script behavior (high-level)
 
