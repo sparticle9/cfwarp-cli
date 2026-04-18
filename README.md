@@ -11,7 +11,7 @@ with broader platform support expected over time.
 
 Today the project supports two main runtime paths:
 
-- **stable:** `singbox-wireguard`
+- **stable:** WireGuard
 - **experimental:** native **MASQUE**
 
 It is designed for server-side use cases where you want a small, scriptable tool rather than a desktop-style VPN client:
@@ -50,7 +50,7 @@ docker stop cfwarp-quickstart
 
 ### Stable
 
-- WireGuard via `singbox-wireguard`
+- WireGuard path
 - explicit proxy mode (`socks5`, `http`)
 - Docker / GHCR deployment flow
 - registration, import, render, start, stop, status
@@ -65,7 +65,7 @@ docker stop cfwarp-quickstart
 | macOS (Apple Silicon) | ✅ | ✅ | ⚠️ planned | ❌ | ❌ | ❌ | ✅ |
 
 Legend:
-- `WG` means `transport=wireguard` (legacy sing-box lane).
+- `WG` means `transport=wireguard` (legacy proxy lane).
 - `MASQUE` means `runtime_family=native` + `transport=masque`.
 - `✅ (experimental)` means usable but expected to have more operational variance.
 
@@ -102,7 +102,7 @@ If you want to evaluate the direction of the native runtime, run **MASQUE** alon
 
 | protocol | Linux amd64 | Linux arm64 | macOS (Apple Silicon) | access modes | startup behavior |
 |---|---|---|---|---|---|
-| WireGuard (`singbox-wireguard`) | ✅ stable | ✅ stable | ✅ stable | socks5/http | predictable |
+| WireGuard | ✅ stable | ✅ stable | ✅ stable | socks5/http | predictable |
 | MASQUE (`native + masque`) | ✅ experimental | ✅ experimental | ❌ unsupported | socks5/http | startup/retry can still occur |
 
 Use separate runtimes/states and the same target workload for side-by-side checks.
