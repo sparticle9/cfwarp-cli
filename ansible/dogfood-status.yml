@@ -3,7 +3,8 @@
 # without opening dashboards.
 #
 # Usage:
-#   ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host>
+#   ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> -e dogfood_hosts=<host>
+#   # Pass dogfood_hosts when the target is not in [warp], e.g. <host>=laxhd.
 
 - name: Inspect cfwarp dogfood stack
   hosts: "{{ dogfood_hosts | default('warp') }}"
@@ -18,6 +19,8 @@
     singbox_config_dir: /etc/sing-box
     singbox_outbounds_path: /etc/sing-box/outbounds.json
     singbox_routes_path: /etc/sing-box/routes.json
+    singbox_rule_set_tag: geosite-google-deepmind
+    singbox_rule_target_outbound: cfwarp-masque-local
     cfwarp_wireguard_port: 16080
     cfwarp_masque_port: 16081
     cfwarp_wireguard_state_dir: /home/cfwarp/.local/state/cfwarp-cli
@@ -267,6 +270,67 @@
     - name: Print sing-box routes fragment
       ansible.builtin.debug:
         msg: "{{ singbox_routes.stdout_lines | default([]) }}"
+
+    - name: Report DeepMind route status in managed fragments
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+
+        def as_list(value):
+            if value is None:
+                return []
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, list):
+                return value
+            return []
+
+        try:
+            with open("{{ singbox_routes_path }}", "r", encoding="utf-8") as f:
+                route_doc = json.load(f)
+            with open("{{ singbox_outbounds_path }}", "r", encoding="utf-8") as f:
+                out_bounds = json.load(f)
+        except FileNotFoundError:
+            print("missing")
+            raise SystemExit(2)
+
+        route = route_doc.get("route", {})
+        rule_sets = route.get("rule_set", [])
+        rules = route.get("rules", [])
+
+        rule_set_tag = {{ singbox_rule_set_tag | to_json }}
+        target_outbound = {{ singbox_rule_target_outbound | to_json }}
+
+        has_rule_set = any(
+            isinstance(item, dict) and item.get("tag") == rule_set_tag
+            for item in rule_sets
+        )
+
+        has_outbound = any(
+            isinstance(rule, dict)
+            and rule.get("action") == "route"
+            and rule.get("outbound") == target_outbound
+            and rule_set_tag in as_list(rule.get("rule_set"))
+            for rule in rules
+        )
+
+        out_tags = {item.get("tag") for item in out_bounds.get("outbounds", []) if isinstance(item, dict)}
+        has_outbounds = target_outbound in out_tags and len(out_tags) > 0
+
+        if has_rule_set and has_outbound and has_outbounds:
+            print("restored")
+        else:
+            print("missing")
+            raise SystemExit(3)
+        PY
+      register: deepmind_route_check
+      changed_when: false
+      failed_when: false
+
+    - name: Print DeepMind routing check result
+      ansible.builtin.debug:
+        msg: |-
+          deepmind_route_check: {{ deepmind_route_check.stdout | default('missing') }}
 
     - name: Print sing-box config check output
       ansible.builtin.debug:

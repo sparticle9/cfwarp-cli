@@ -15,7 +15,7 @@ Usage:
 
 Env:
   CFWARP_ANSIBLE_INVENTORY  path to ansible inventory (default: ansible/inventory.ini)
-  CFWARP_ANSIBLE_LIMIT      host pattern/group (default: warp)
+  CFWARP_ANSIBLE_LIMIT      host pattern/group (default: warp); forwarded as --limit and dogfood_hosts
   CFWARP_REMOTE_COMPOSE_DIR  compose path on host (default: /opt/cfwarp-dogfood)
 
 Examples:
@@ -56,9 +56,13 @@ run_playbook() {
   )
 
   if [[ -n "$LIMIT" ]]; then
-    ansible_args+=(--limit "$LIMIT")
+    ansible_args+=(
+      --limit "$LIMIT"
+      -e "dogfood_hosts=${LIMIT}"
+    )
   fi
 
+  # Later args can override defaults, including a custom dogfood_hosts value.
   ansible-playbook "${ansible_args[@]}" "$@"
 }
 

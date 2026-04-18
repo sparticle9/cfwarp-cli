@@ -69,19 +69,28 @@ Copy `ansible/inventory.ini.example` to `ansible/inventory.ini`, add your remote
 ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit <host>
 ```
 
+If your deployment host is not in `[warp]` (for example `laxhd`), pass `dogfood_hosts` explicitly so the router mutation applies to the intended host:
+
+```bash
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit laxhd \
+  -e dogfood_hosts=laxhd
+```
+
 If you want to try the Debian image variant explicitly:
 
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit <host> \
+  -e dogfood_hosts=<host> \
   -e cfwarp_image=ghcr.io/sparticle9/cfwarp-cli:latest-debian \
   -e cfwarp_wireguard_state_dir=/home/nonroot/.local/state/cfwarp-cli \
   -e cfwarp_masque_state_dir=/home/nonroot/.local/state/cfwarp-cli
 ```
 
-Then inspect the running stack:
+Then inspect the running stack and routing injection state:
 
 ```bash
-ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host>
+ansible-playbook -i ansible/inventory.ini ansible/dogfood-status.yml --limit <host> \
+  -e dogfood_hosts=<host>
 ```
 
 
@@ -174,7 +183,15 @@ You can override that at deploy time:
 
 ```bash
 ansible-playbook -i ansible/inventory.ini ansible/dogfood-deploy.yml --limit <host> \
+  -e dogfood_hosts=<host> \
   -e singbox_rule_target_outbound=cfwarp-warp-local
+```
+
+To confirm routing was restored after deploy, inspect the managed fragments from status output (`ansible/dogfood-status.yml`) or run:
+
+```bash
+ansible -i ansible/inventory.ini <host> -b -m shell -a \
+  "grep -q 'geosite-google-deepmind' /etc/sing-box/routes.json && cat /etc/sing-box/routes.json"
 ```
 
 ### Host daemon example

@@ -91,13 +91,17 @@ cp ansible/inventory.ini.example ansible/inventory.ini
 
 ```bash
 export CFWARP_ANSIBLE_INVENTORY=ansible/inventory.ini
-export CFWARP_ANSIBLE_LIMIT=proxy-host-1
+export CFWARP_ANSIBLE_LIMIT=laxhd   # or proxy-host-1, if your target is in [warp]
+
+# The deploy and status playbooks use `dogfood_hosts` to select where sing-box routing is
+# managed. Explicitly set it when the target is outside the [warp] group.
+ansible-playbook -i "$CFWARP_ANSIBLE_INVENTORY" \
+  ansible/dogfood-deploy.yml --limit "$CFWARP_ANSIBLE_LIMIT" \
+  -e "dogfood_hosts=$CFWARP_ANSIBLE_LIMIT"
 
 ansible-playbook -i "$CFWARP_ANSIBLE_INVENTORY" \
-  ansible/dogfood-deploy.yml --limit "$CFWARP_ANSIBLE_LIMIT"
-
-ansible-playbook -i "$CFWARP_ANSIBLE_INVENTORY" \
-  ansible/dogfood-status.yml --limit "$CFWARP_ANSIBLE_LIMIT"
+  ansible/dogfood-status.yml --limit "$CFWARP_ANSIBLE_LIMIT" \
+  -e "dogfood_hosts=$CFWARP_ANSIBLE_LIMIT"
 
 ansible -i "$CFWARP_ANSIBLE_INVENTORY" "$CFWARP_ANSIBLE_LIMIT" -b -m shell \
   -a "cd /opt/cfwarp-dogfood && docker compose down"

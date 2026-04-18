@@ -13,6 +13,8 @@
 #   - Default local ports are 16080 (WireGuard) and 16081 (MASQUE).
 #   - Default router rule sends geosite-google-deepmind to the MASQUE outbound,
 #     keeping the blast radius narrow while exercising the experimental lane.
+#   - For targets outside the [warp] group (for example laxhd), set
+#     `-e dogfood_hosts=<host-or-group>` so the merge/restart logic runs there.
 
 - name: Deploy cfwarp dogfood stack and sing-box routing
   hosts: "{{ dogfood_hosts | default('warp') }}"
@@ -378,6 +380,62 @@
       changed_when: false
       when: singbox_manage_router | bool
 
+    - name: Validate rendered candidates contain DeepMind routing wiring
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+
+        def as_list(value):
+            if value is None:
+                return []
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, list):
+                return value
+            return []
+
+        out_bounds = json.loads(open("{{ singbox_outbounds_candidate }}", "r", encoding="utf-8").read())
+        out_route = json.loads(open("{{ singbox_routes_candidate }}", "r", encoding="utf-8").read())
+
+        expected_outbounds = {
+            "warp": {{ singbox_warp_outbound_tag | to_json }},
+            "masque": {{ singbox_masque_outbound_tag | to_json }},
+        }
+
+        available_tags = {
+            item.get("tag")
+            for item in out_bounds.get("outbounds", [])
+            if isinstance(item, dict) and item.get("tag")
+        }
+
+        missing = [
+            name for name, tag in expected_outbounds.items() if tag and tag not in available_tags
+        ]
+        if missing:
+            raise SystemExit("missing expected outbounds for rendered candidates: %s" % ", ".join(missing))
+
+        route_doc = out_route.get("route", {})
+        rule_sets = route_doc.get("rule_set", [])
+        if not any(isinstance(item, dict) and item.get("tag") == {{ singbox_rule_set_tag | to_json }} for item in rule_sets):
+            raise SystemExit("missing expected rule set tag: {{ singbox_rule_set_tag }}")
+
+        rules = route_doc.get("rules", [])
+        target_outbound = {{ singbox_rule_target_outbound | to_json }}
+        managed_tag = {{ singbox_rule_set_tag | to_json }}
+        if not any(
+            isinstance(rule, dict)
+            and rule.get("action") == "route"
+            and rule.get("outbound") == target_outbound
+            and managed_tag in as_list(rule.get("rule_set"))
+            for rule in rules
+        ):
+            raise SystemExit(
+                "missing managed DeepMind route: tag=%s outbound=%s" % (managed_tag, target_outbound)
+            )
+        PY
+      changed_when: false
+      when: singbox_manage_router | bool
+
     - name: Prepare temporary sing-box validation directory
       ansible.builtin.file:
         path: "{{ singbox_validation_dir }}"
@@ -431,6 +489,64 @@
         mode: "0644"
         backup: true
       notify: restart sing-box
+      when: singbox_manage_router | bool
+
+    - name: Verify installed sing-box route wiring for geosite-google-deepmind
+      ansible.builtin.shell: |
+        python3 - <<'PY'
+        import json
+
+        def as_list(value):
+            if value is None:
+                return []
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, list):
+                return value
+            return []
+
+        with open("{{ singbox_outbounds_path }}", "r", encoding="utf-8") as f:
+            out_bounds = json.load(f)
+        with open("{{ singbox_routes_path }}", "r", encoding="utf-8") as f:
+            out_route = json.load(f)
+
+        expected_outbounds = {
+            "warp": {{ singbox_warp_outbound_tag | to_json }},
+            "masque": {{ singbox_masque_outbound_tag | to_json }},
+        }
+
+        available_tags = {
+            item.get("tag")
+            for item in out_bounds.get("outbounds", [])
+            if isinstance(item, dict) and item.get("tag")
+        }
+
+        missing = [
+            name for name, tag in expected_outbounds.items() if tag and tag not in available_tags
+        ]
+        if missing:
+            raise SystemExit("missing expected outbounds after install: %s" % ", ".join(missing))
+
+        route_doc = out_route.get("route", {})
+        rule_sets = route_doc.get("rule_set", [])
+        if not any(isinstance(item, dict) and item.get("tag") == {{ singbox_rule_set_tag | to_json }} for item in rule_sets):
+            raise SystemExit("missing expected rule set tag: {{ singbox_rule_set_tag }}")
+
+        target_outbound = {{ singbox_rule_target_outbound | to_json }}
+        managed_tag = {{ singbox_rule_set_tag | to_json }}
+        rules = route_doc.get("rules", [])
+        if not any(
+            isinstance(rule, dict)
+            and rule.get("action") == "route"
+            and rule.get("outbound") == target_outbound
+            and managed_tag in as_list(rule.get("rule_set"))
+            for rule in rules
+        ):
+            raise SystemExit(
+                "missing managed DeepMind route after install: tag=%s outbound=%s" % (managed_tag, target_outbound)
+            )
+        PY
+      changed_when: false
       when: singbox_manage_router | bool
 
     - name: Flush handlers
