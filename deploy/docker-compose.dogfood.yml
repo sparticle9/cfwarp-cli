@@ -13,6 +13,20 @@ services:
       CFWARP_STATE_DIR: ${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     volumes:
       - ${CFWARP_WIREGUARD_DATA_DIR:-./state/wireguard}:${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/cfwarp-cli
+        - status
+        - --state-dir
+        - ${CFWARP_WIREGUARD_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
+        - --require-account
+        - --require-running
+        - --require-reachable
+      interval: 30s
+      timeout: 10s
+      start_period: 45s
+      retries: 3
 
   masque:
     image: ${CFWARP_IMAGE:-ghcr.io/sparticle9/cfwarp-cli:latest}
@@ -28,3 +42,17 @@ services:
       CFWARP_STATE_DIR: ${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
     volumes:
       - ${CFWARP_MASQUE_DATA_DIR:-./state/masque}:${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/cfwarp-cli
+        - status
+        - --state-dir
+        - ${CFWARP_MASQUE_STATE_DIR:-/home/cfwarp/.local/state/cfwarp-cli}
+        - --require-account
+        - --require-running
+        - --require-reachable
+      interval: 30s
+      timeout: 10s
+      start_period: 45s
+      retries: 3
