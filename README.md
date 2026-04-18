@@ -235,11 +235,11 @@ cfwarp-cli validate --json --state-dir /path/to/state
 If status is healthy, you can run a lightweight throughput check through the proxy via Cloudflare's speedtest APIs:
 
 ```bash
-# Download-only (bytes=50,000,000 for a larger sample)
+# Download-only (5,000,000-byte sample; bump via bytes=... if needed for heavier checks)
 curl -o /dev/null \
   --proxy socks5h://127.0.0.1:1080 \
   -sS -w 'speed.download.bytes=%{size_download} time=%{time_total}s bps=%{speed_download}\n' \
-  'https://speed.cloudflare.com/__down?bytes=50000000'
+  'https://speed.cloudflare.com/__down?bytes=5000000'
 
 # Upload-only (optional, 2 MB sample)
 curl -o /dev/null \
