@@ -5,7 +5,7 @@
 Current support is aimed at:
 
 - **Linux** — full runtime focus
-- **macOS on Apple Silicon** — currently supported for local CLI/config workflows, with the legacy WireGuard lane enabled in the support matrix
+- **macOS on Apple Silicon** — supported for local CLI/config workflows and local Docker usage on the legacy WireGuard lane; native MASQUE and remote deployment tooling remain Linux-first
 
 with broader platform support expected over time.
 
@@ -38,7 +38,8 @@ It is designed for server-side use cases where you want a small, scriptable tool
 | capability | Linux | macOS (Apple Silicon) |
 |---|---:|---:|
 | config / validation / docs-driven workflows | yes | yes |
-| legacy WireGuard control plane (`register`, `import`, `render`, `up`, `down`) | yes | yes |
+| local CLI control-plane (`register`, `import`, `render`, `up`, `down`) | yes | yes |
+| local Docker (`docker run` / `docker-compose`) for legacy WireGuard lane | yes | yes |
 | native MASQUE runtime | yes | no |
 | remote dogfood / Ansible deployment path | yes | no |
 
@@ -93,7 +94,7 @@ The current config model uses these terms:
 
 ### 1. Build or use a published image
 
-For deployable or shared usage, prefer the GHCR images built by GitHub Actions.
+For deployable or shared usage, prefer the GHCR images built by GitHub Actions (multi-arch; Linux `amd64` + `arm64`).
 
 Examples:
 

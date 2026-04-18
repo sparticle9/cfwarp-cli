@@ -2,7 +2,7 @@
 
 This repository contains both **operator-facing** and **development-facing** documentation.
 
-Current support is aimed at Linux and macOS on Apple Silicon. The broadest runtime and deployment coverage is still Linux-host oriented, while macOS on Apple Silicon currently includes config workflows and the legacy WireGuard control-plane lane.
+Current support is aimed at Linux and macOS on Apple Silicon. The broadest runtime and deployment coverage is still Linux-host oriented, while macOS on Apple Silicon currently supports local CLI and local Docker workflows for the legacy WireGuard control-plane lane.
 
 If you are new here, start with the section that matches your goal.
 
