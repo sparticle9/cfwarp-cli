@@ -418,6 +418,7 @@ cfwarp-cli address show --json --state-dir /path/to/state
 - `docs/README.md` — documentation map
 - `docs/dogfood-debian13.md` — remote host deployment and sing-box integration
 - `docs/warp-rotation-unlock.md` — caps, rotation, daemon, hashed IP memory
+- `.pi/agent/skills/cfwarp-local-remote-ops/SKILL.md` — local tmux-first ops workflow and remote Linux deployment guidance
 
 ### Project background and evaluation docs
 

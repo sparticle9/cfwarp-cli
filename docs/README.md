@@ -21,6 +21,10 @@ Start here:
   - dual WireGuard / MASQUE localhost proxies
   - sing-box fragment integration
   - on-demand status workflow
+- `../.pi/agent/skills/cfwarp-local-remote-ops/SKILL.md`
+  - local tmux-based deploy/ops workflow
+  - local vs remote Linux runbook
+  - common status/rotation/bench checks
 
 - `warp-rotation-unlock.md`
   - transport / access / caps / rotation model
