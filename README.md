@@ -230,7 +230,30 @@ With a durable data dir:
 cfwarp-cli validate --json --state-dir /path/to/state
 ```
 
-### 5. Run the daemon
+### 5. Optional Cloudflare throughput smoke test
+
+If status is healthy, you can run a lightweight throughput check through the proxy via Cloudflare's speedtest APIs:
+
+```bash
+# Download-only (bytes=50,000,000 for a larger sample)
+curl -o /dev/null \
+  --proxy socks5h://127.0.0.1:1080 \
+  -sS -w 'speed.download.bytes=%{size_download} time=%{time_total}s bps=%{speed_download}\n' \
+  'https://speed.cloudflare.com/__down?bytes=50000000'
+
+# Upload-only (optional, 2 MB sample)
+curl -o /dev/null \
+  --proxy socks5h://127.0.0.1:1080 \
+  -sS -w 'speed.upload.bytes=%{size_upload} time=%{time_total}s bps=%{speed_upload}\n' \
+  -X POST 'https://speed.cloudflare.com/__up' \
+  --data-binary @<(head -c 2000000 </dev/zero)
+```
+
+`time_total` is in seconds, `size_*` is bytes, and `bps` is bytes/sec (multiply by 8/1_000_000 for Mb/s).
+
+Use this only as a rough sanity check and avoid very large samples for routine checks.
+
+### 6. Run the daemon
 
 ```bash
 cfwarp-cli daemon run --settings-file /path/to/settings.json
@@ -242,7 +265,7 @@ or
 cfwarp-cli daemon run --state-dir /path/to/state
 ```
 
-### 6. Inspect and control it
+### 7. Inspect and control it
 
 ```bash
 cfwarp-cli daemon ctl status --settings-file /path/to/settings.json
