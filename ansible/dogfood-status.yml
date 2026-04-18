@@ -15,6 +15,7 @@
     compose_dir: /opt/cfwarp-dogfood
     compose_file: docker-compose.yml
     dogfood_backend_log_tail_lines: 40
+    dogfood_status_tmp_dir: /tmp/cfwarp-dogfood-status
     singbox_service_name: sing-box
     singbox_config_dir: /etc/sing-box
     singbox_outbounds_path: /etc/sing-box/outbounds.json
@@ -117,12 +118,32 @@
       loop_control:
         label: "{{ item.item.name }}"
 
-    - name: Show backend runtime state files when present
+    - name: Ensure dogfood status scratch directory exists
+      ansible.builtin.file:
+        path: "{{ dogfood_status_tmp_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Copy backend runtime.json from each proxy container when present
       ansible.builtin.shell: |
         set -euo pipefail
-        docker exec {{ item.container_name | quote }} sh -lc 'state_dir={{ item.state_dir | quote }}; if [ -f "$state_dir/run/runtime.json" ]; then cat "$state_dir/run/runtime.json"; else echo no-runtime-json; fi'
-      args:
-        executable: /bin/bash
+        dst="{{ dogfood_status_tmp_dir }}/{{ item.name }}-runtime.json"
+        rm -f "$dst"
+        if ! docker cp {{ item.container_name | quote }}:{{ item.state_dir }}/run/runtime.json "$dst" >/dev/null 2>&1; then
+          printf 'no-runtime-json\n' > "$dst"
+        fi
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: runtime_file_copy
+      changed_when: false
+      failed_when: false
+
+    - name: Read copied backend runtime.json for each proxy
+      ansible.builtin.command:
+        argv:
+          - cat
+          - "{{ dogfood_status_tmp_dir }}/{{ item.name }}-runtime.json"
       loop: "{{ proxy_checks }}"
       loop_control:
         label: "{{ item.name }}"
@@ -140,12 +161,28 @@
       loop_control:
         label: "{{ item.item.name }}"
 
-    - name: Tail backend stderr logs from state dir
+    - name: Copy backend stderr logs from each proxy container when present
       ansible.builtin.shell: |
         set -euo pipefail
-        docker exec {{ item.container_name | quote }} sh -lc 'state_dir={{ item.state_dir | quote }}; tail -n {{ dogfood_backend_log_tail_lines | int }} "$state_dir/logs/backend.stderr.log" 2>/dev/null || true'
-      args:
-        executable: /bin/bash
+        dst="{{ dogfood_status_tmp_dir }}/{{ item.name }}-backend.stderr.log"
+        rm -f "$dst"
+        if ! docker cp {{ item.container_name | quote }}:{{ item.state_dir }}/logs/backend.stderr.log "$dst" >/dev/null 2>&1; then
+          printf 'backend.stderr.log unavailable\n' > "$dst"
+        fi
+      loop: "{{ proxy_checks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: backend_stderr_copy
+      changed_when: false
+      failed_when: false
+
+    - name: Read copied backend stderr log for each proxy
+      ansible.builtin.command:
+        argv:
+          - tail
+          - -n
+          - "{{ dogfood_backend_log_tail_lines | int }}"
+          - "{{ dogfood_status_tmp_dir }}/{{ item.name }}-backend.stderr.log"
       loop: "{{ proxy_checks }}"
       loop_control:
         label: "{{ item.name }}"
