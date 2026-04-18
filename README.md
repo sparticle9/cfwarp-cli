@@ -68,6 +68,29 @@ Legend:
 - `WG` means `transport=wireguard` (legacy proxy lane).
 - `MASQUE` means `runtime_family=native` + `transport=masque`.
 - `✅ (experimental)` means usable but expected to have more operational variance.
+- `⚠️ planned` means command/API path exists but not yet production-ready.
+
+### IPv4/IPv6 behavior and evidence
+
+For control-plane and tunnel identity, support is currently this:
+
+- `WG`: both IPv4 and IPv6 tunnel addresses are required at registration.
+- `MASQUE`: IPv4 tunnel address is required; IPv6 address is optional but accepted when present.
+- For MASQUE tunnel transport, endpoint family is selectable via `masque_options.use_ipv6` (or `CFWARP_MASQUE_USE_IPV6=true` for env workflows), default is IPv4-first.
+
+What is currently tested in CI (`go test ./...`):
+
+- `internal/warp/client_test.go` validates WireGuard address parsing and required fields:
+  - both v4/v6 success path (`TestRegister_Success`)
+  - missing addresses failure (`TestRegister_MissingAddresses`)
+- `internal/cloudflare/client_test.go` validates MASQUE control-plane fields and parsing (`TestEnrollMasqueKey_Success`).
+- `internal/transport/masque/transport_test.go` validates endpoint handling with IPv4/v6 fields.
+- `internal/transport/masque/retry_test.go` validates emitted endpoint-family metrics/events (`family=ipv4` in current default path).
+- `docs/masque-real-target-matrix-20260408.md` includes measured IPv4 and IPv6 MASQUE runtime cases.
+
+Current coverage status:
+- WG address-family logic: covered in unit tests.
+- MASQUE family selection and endpoint behavior: covered in unit tests and one full IPv4/IPv6 benchmark matrix run (`docs/masque-real-target-matrix-20260408.md`).
 
 Linux arm64 validation should be reported with exact host architecture and image tag when filing regressions.
 
