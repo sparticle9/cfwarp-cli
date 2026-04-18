@@ -23,6 +23,29 @@ It is designed for server-side use cases where you want a small, scriptable tool
 - CLI-friendly health, status, and rotation control
 - repeatable benchmarking across implementations
 
+## Start in ~60 seconds
+
+If this is your first run, use one command:
+
+```bash
+# Linux/macOS quick smoke (no local files needed)
+docker run --rm -d --name cfwarp-quickstart -p 127.0.0.1:1080:1080 ghcr.io/sparticle9/cfwarp-cli:latest
+
+# Wait a few seconds, then verify proxy + route
+curl -fsSL --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | head -n 6
+
+# Optional: CLI-visible status check from inside container
+docker exec cfwarp-quickstart cfwarp-cli status --json --state-dir /home/cfwarp/.local/state/cfwarp-cli
+```
+
+Stop it when done:
+
+```bash
+docker stop cfwarp-quickstart
+```
+
+> This is intentionally minimal and works for first-time onboarding; if this works, the project is set up correctly.
+
 ## Current status
 
 ### Stable
@@ -35,13 +58,33 @@ It is designed for server-side use cases where you want a small, scriptable tool
 
 ### Practical support matrix
 
-| capability | Linux | macOS (Apple Silicon) |
-|---|---:|---:|
-| config / validation / docs-driven workflows | yes | yes |
-| local CLI control-plane (`register`, `import`, `render`, `up`, `down`) | yes | yes |
-| local Docker (`docker run` / `docker-compose`) for legacy WireGuard lane | yes | yes |
-| native MASQUE runtime | yes | no |
-| remote dogfood / Ansible deployment path | yes | no |
+| capability | Linux amd64 | Linux arm64 | macOS (Apple Silicon) |
+|---|---:|---:|---:|
+| config / validation / docs-driven workflows | yes | yes | yes |
+| local CLI control-plane (`register`, `import`, `render`, `up`, `down`) | yes | ⚠️ not yet fully validated on native hosts* | yes |
+| local Docker (`docker run` / `docker-compose`) for legacy WireGuard lane | yes (`linux/amd64` images) | ✅ (published images; container tested) | yes |
+| local Docker for experimental MASQUE lane | yes | ✅ | no |
+| native remote dogfood / Ansible deployment path | yes (Linux only) | yes (Linux only) | no |
+| native MASQUE runtime (`runtime_family=native`, `transport=masque`) | experimental | experimental | no |
+
+*Native Linux arm64 host verification is still missing; please run and report in issues.
+
+If you can validate on a real Linux arm64 VPS, add this to your checklist:
+
+```bash
+# replace <host> and optional user
+ssh <host> 'uname -m && docker run --rm -d --name cfwarp-arm64-check -p 127.0.0.1:1080:1080 ghcr.io/sparticle9/cfwarp-cli:latest'
+sleep 5
+ssh <host> 'curl -fsSL --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | head -n 6'
+ssh <host> 'docker stop cfwarp-arm64-check'
+```
+
+If you're a power user doing hardening/comparisons, use this as the baseline for your own matrix and issue reports.
+
+For production-style traffic, use the WireGuard lane by default.
+
+If you want to evaluate MASQUE, run it side-by-side with WireGuard and compare in your workload and region.
+
 
 ### Experimental
 
@@ -52,6 +95,38 @@ It is designed for server-side use cases where you want a small, scriptable tool
 
 If you need the safest current lane for real traffic, use **WireGuard**.
 If you want to evaluate the direction of the native runtime, run **MASQUE** alongside it and compare behavior.
+
+## WireGuard vs MASQUE (practical guidance)
+
+Use this for issue reports and internal comparisons:
+
+| dimension | WireGuard (legacy) | MASQUE (native) |
+|---|---|---|
+| deployment maturity | stable | experimental |
+| default profile for beginners | ✅ yes | ⚠️ for evaluation |
+| startup behavior | predictable | currently improving; occasional reconnect/startup nuances |
+| Linux arm64 support | ✅ image + container path; host-native check pending | ⚠️ host/native check pending |
+| when to use | default path for production-like traffic; stable first-pass profile. | evaluation path and migration rehearsal; pair with WireGuard for comparison |
+
+For side-by-side performance checks, use separate runtimes/states and the same target workload.
+Good starting references are:
+
+- `docs/dogfood-debian13.md` (dual-stack deployment)
+- `docs/masque-real-target-matrix-20260408.md` (observability + measured tradeoffs)
+- `docs/native-masque-vs-singbox-review.md` (design risks and caveats)
+
+### Issue report minimum (helps collaborators close gaps fast)
+
+If something fails, include:
+
+- exact platform and architecture (e.g. `linux/arm64`, `linux/amd64`, `darwin/arm64`)
+- command path used (`docker run`, `cfwarp-cli up`, `daemon run`, etc.)
+- full `settings.json` or env overlay
+- `cfwarp-cli status --json --require-warp`
+- `curl -fsSL --proxy socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace`
+- if used, one line from speed check (5MB `__down`)
+- latest 40 lines from `backend.stderr.log` (container or `state/logs`)
+- whether this is native Linux arm64 host vs docker image
 
 ## What the tool can do
 
