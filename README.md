@@ -58,18 +58,20 @@ docker stop cfwarp-quickstart
 
 ### Practical support matrix
 
-| capability | Linux amd64 | Linux arm64 | macOS (Apple Silicon) |
-|---|---:|---:|---:|
-| config / validation / docs-driven workflows | yes | yes | yes |
-| local CLI control-plane (`register`, `import`, `render`, `up`, `down`) | yes | ✅ validated on a Linux arm64 VPS (`orabr`) | yes |
-| local Docker (`docker run` / `docker-compose`) for legacy WireGuard lane | yes (`linux/amd64` images) | ✅ (published images; container tested) | yes |
-| local Docker for experimental MASQUE lane | yes | ✅ | no |
-| native remote dogfood / Ansible deployment path | yes (Linux only) | yes (Linux only) | no |
-| native MASQUE runtime (`runtime_family=native`, `transport=masque`) | experimental | experimental | no |
+| platform | WG + socks5 | WG + http | WG + tun | MASQUE + socks5 | MASQUE + http | MASQUE + tun | control plane (`register`/`import`/`up`/`down`/`status`) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Linux amd64 | ✅ | ✅ | ⚠️ planned | ✅ (experimental) | ✅ (experimental) | ❌ | ✅ |
+| Linux arm64 | ✅ | ✅ | ⚠️ planned | ✅ (experimental) | ✅ (experimental) | ❌ | ✅ |
+| macOS (Apple Silicon) | ✅ | ✅ | ⚠️ planned | ❌ | ❌ | ❌ | ✅ |
 
-*Linux arm64 host verification is now validated for local CLI + container workflows from `orabr`; continue to report any regressions with exact host + image tag.
+Legend:
+- `WG` means `transport=wireguard` (legacy sing-box lane).
+- `MASQUE` means `runtime_family=native` + `transport=masque`.
+- `✅ (experimental)` means usable but expected to have more operational variance.
 
-If you can validate on a real Linux arm64 VPS, add this to your checklist:
+Linux arm64 validation should be reported with exact host architecture and image tag when filing regressions.
+
+If you can validate on a Linux arm64 host, add this to your checklist:
 
 ```bash
 # replace <host> and optional user
@@ -96,19 +98,14 @@ If you want to evaluate MASQUE, run it side-by-side with WireGuard and compare i
 If you need the safest current lane for real traffic, use **WireGuard**.
 If you want to evaluate the direction of the native runtime, run **MASQUE** alongside it and compare behavior.
 
-## WireGuard vs MASQUE (practical guidance)
+## WireGuard vs MASQUE (practical comparison)
 
-Use this for issue reports and internal comparisons:
+| protocol | Linux amd64 | Linux arm64 | macOS (Apple Silicon) | access modes | startup behavior |
+|---|---|---|---|---|---|
+| WireGuard (`singbox-wireguard`) | ✅ stable | ✅ stable | ✅ stable | socks5/http | predictable |
+| MASQUE (`native + masque`) | ✅ experimental | ✅ experimental | ❌ unsupported | socks5/http | startup/retry can still occur |
 
-| dimension | WireGuard (legacy) | MASQUE (native) |
-|---|---|---|
-| deployment maturity | stable | experimental |
-| default profile for beginners | ✅ yes | ⚠️ for evaluation |
-| startup behavior | predictable | currently improving; occasional reconnect/startup nuances |
-| Linux arm64 support | ✅ image + container path; host-native check pending | ⚠️ host/native check pending |
-| when to use | default path for production-like traffic; stable first-pass profile. | evaluation path and migration rehearsal; pair with WireGuard for comparison |
-
-For side-by-side performance checks, use separate runtimes/states and the same target workload.
+Use separate runtimes/states and the same target workload for side-by-side checks.
 Good starting references are:
 
 - `docs/dogfood-debian13.md` (dual-stack deployment)
