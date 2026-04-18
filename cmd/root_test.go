@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -42,10 +44,58 @@ func TestHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--help failed: %v", err)
 	}
-	for _, cmd := range []string{"register", "import", "registration", "transport", "mode", "stats", "render", "up", "down", "connect", "disconnect", "status", "endpoint", "version"} {
+	for _, cmd := range []string{"register", "import", "registration", "transport", "mode", "stats", "render", "up", "down", "connect", "disconnect", "status", "endpoint", "completion", "version"} {
 		if !strings.Contains(out, cmd) {
 			t.Errorf("expected help to list command %q", cmd)
 		}
+	}
+}
+
+func TestCompletionCommand(t *testing.T) {
+	out, err := executeRoot("completion", "bash")
+	if err != nil {
+		t.Fatalf("completion bash failed: %v", err)
+	}
+	if len(out) < 100 {
+		t.Fatalf("expected non-trivial bash completion output, got %q", out)
+	}
+
+	out, err = executeRoot("completion", "zsh")
+	if err != nil {
+		t.Fatalf("completion zsh failed: %v", err)
+	}
+	if len(out) < 100 {
+		t.Fatalf("expected non-trivial zsh completion output, got %q", out)
+	}
+
+	if _, err = executeRoot("completion"); err == nil {
+		t.Fatalf("completion without args should fail")
+	}
+
+	if _, err = executeRoot("completion", "fish"); err == nil {
+		t.Fatalf("completion for unsupported shell should fail")
+	}
+}
+
+func TestCompletionInitFileOption(t *testing.T) {
+	initFile := filepath.Join(t.TempDir(), ".zshrc.local")
+	out, err := executeRoot("completion", "zsh", "--init-file", initFile)
+	if err != nil {
+		t.Fatalf("completion zsh with init file failed: %v", err)
+	}
+	if !strings.Contains(out, "Appended zsh completion") {
+		t.Fatalf("expected confirmation output, got: %s", out)
+	}
+
+	contents, err := os.ReadFile(initFile)
+	if err != nil {
+		t.Fatalf("failed reading init file %s: %v", initFile, err)
+	}
+	if !strings.Contains(string(contents), "# cfwarp-cli completion (zsh)") {
+		t.Fatalf("expected init file marker in completion content, got: %s", string(contents))
+	}
+	if !strings.Contains(string(contents), "#compdef cfwarp-cli") {
+		t.Fatalf("expected zsh completion function registration in init file, got: %s", string(contents))
 	}
 }
 

@@ -411,6 +411,18 @@ cfwarp-cli rotate --attempts 5 --service gemini --state-dir /path/to/state
 cfwarp-cli address show --json --state-dir /path/to/state
 ```
 
+### Shell completion (bash / zsh)
+
+```bash
+# Generate and source once (session only)
+cfwarp-cli completion bash | source
+cfwarp-cli completion zsh | source
+
+# Persist to your custom init file
+cfwarp-cli completion zsh --init-file ~/.zshrc.local
+cfwarp-cli completion bash --init-file ~/.bashrc.local
+```
+
 ## User documentation map
 
 ### Operator / user docs

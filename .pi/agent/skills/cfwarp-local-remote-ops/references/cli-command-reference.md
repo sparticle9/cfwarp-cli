@@ -47,6 +47,18 @@ cfwarp-cli status --json --trace --state-dir "$CFWARP_STATE_DIR"
 cfwarp-cli daemon ctl status --state-dir "$CFWARP_STATE_DIR"
 ```
 
+### Shell completion (bash / zsh)
+
+```bash
+# One-off completion for current session
+cfwarp-cli completion bash | source
+cfwarp-cli completion zsh | source
+
+# Persist for custom init file (for example ~/.zshrc.local)
+cfwarp-cli completion zsh --init-file ~/.zshrc.local
+cfwarp-cli completion bash --init-file ~/.bashrc.local
+```
+
 ### Common maintenance
 
 ```bash
