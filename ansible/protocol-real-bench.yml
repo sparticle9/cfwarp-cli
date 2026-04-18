@@ -138,6 +138,7 @@
     bench_id: ""
     cfwarp_image: "ghcr.io/sparticle9/cfwarp-cli:perf-masque-tuning"
     image_revision_expected: ""
+    cfwarp_container_state_dir: "/tmp/cfwarp-state"
     helper_image: "cfwarp-protocol-bench-helper:latest"
     usque_version: "v1.4.2"
     usque_asset: "usque_1.4.2_linux_amd64.zip"
@@ -224,9 +225,10 @@
       when: udp_buffer_bytes | int > 0
 
     - name: Apply larger UDP socket buffer sysctls
+      become: true
       ansible.builtin.shell: |
         set -euo pipefail
-        sudo sysctl -w net.core.rmem_max={{ udp_buffer_bytes | int }} net.core.wmem_max={{ udp_buffer_bytes | int }} >/dev/null
+        sysctl -w net.core.rmem_max={{ udp_buffer_bytes | int }} net.core.wmem_max={{ udp_buffer_bytes | int }} >/dev/null
       args:
         executable: /bin/bash
       changed_when: true
@@ -350,6 +352,7 @@
 
         rm -rf "$case_dir"
         mkdir -p "$case_dir" "$state_dir"
+        chmod 0777 "$state_dir"
 
         write_proxychains_config() {
           cat > "$case_dir/proxychains.conf" <<EOF
@@ -368,7 +371,7 @@
             docker run -d \
               --name "protocol-real-${case_name}" \
               -p "127.0.0.1:${proxy_port}:1080" \
-              -v "$state_dir:/home/cfwarp/.local/state/cfwarp-cli" \
+              -e CFWARP_STATE_DIR={{ cfwarp_container_state_dir | quote }} \
               {% for key, value in item.env.items() %}-e {{ key }}={{ value | quote }} \
               {% endfor %}{% if item.name == 'masque' and masque_endpoint_override | string | length > 0 %}-e CFWARP_ENDPOINT_OVERRIDE={{ masque_endpoint_override | quote }} \
               {% endif %}{% if item.name == 'masque' and masque_sni | string | length > 0 %}-e CFWARP_MASQUE_SNI={{ masque_sni | quote }} \
@@ -380,9 +383,9 @@
               {% endif %}{% if item.name == 'masque' and masque_reconnect_delay_millis | int > 0 %}-e CFWARP_MASQUE_RECONNECT_DELAY_MILLIS={{ (masque_reconnect_delay_millis | int) | string | quote }} \
               {% endif %}
               "$cfwarp_image" >/dev/null
-            stdout_log="$state_dir/logs/backend.stdout.log"
-            stderr_log="$state_dir/logs/backend.stderr.log"
-            runtime_json="$state_dir/run/runtime.json"
+            stdout_log="$case_dir/stdout.log"
+            stderr_log="$case_dir/stderr.log"
+            runtime_json="$case_dir/runtime.json"
           else
             if [ ! -f "$usque_config" ]; then
               "$usque_bin" register -a -c "$usque_config" >"$case_dir/register.stdout.log" 2>"$case_dir/register.stderr.log"
@@ -410,14 +413,9 @@
           fi
 
           echo "${case_name} failed attempt ${attempt}"
-          if [ -f "$stdout_log" ]; then
-            echo "-- stdout --"
-            tail -n 50 "$stdout_log" || true
-          fi
-          if [ -f "$stderr_log" ]; then
-            echo "-- stderr --"
-            tail -n 100 "$stderr_log" || true
-          fi
+          docker logs "protocol-real-${case_name}" > "$stderr_log" 2>&1 || true
+          echo "-- stderr --"
+          tail -n 100 "$stderr_log" || true
           attempt=$((attempt + 1))
           if [ "$attempt" -le "$startup_attempts" ]; then
             sleep "$retry_sleep"
@@ -463,12 +461,9 @@
           i=$((i + 1))
         done
 
-        if [ ! -f "$stderr_log" ]; then
-          : > "$stderr_log"
-        fi
-        if [ ! -f "$runtime_json" ]; then
-          : > "$runtime_json"
-        fi
+        mkdir -p "$case_dir"
+        docker logs "protocol-real-${case_name}" > "$stderr_log" 2>&1 || true
+        docker exec "protocol-real-${case_name}" cfwarp-cli status --json --state-dir {{ cfwarp_container_state_dir | to_json }} > "$runtime_json" 2>/dev/null || true
 
         python3 - "$tmp_latency" "$tmp_iperf" "$tmp_http" "$stderr_log" "$runtime_json" "$case_name" "$kind" "$attempt" > "$result_json" <<'PY'
         import json, pathlib, statistics, sys
@@ -654,9 +649,10 @@
         msg: "{{ protocol_real_summary.stdout_lines }}"
 
     - name: Restore UDP socket buffer sysctls
+      become: true
       ansible.builtin.shell: |
         set -euo pipefail
-        sudo sysctl -w net.core.rmem_max={{ udp_rmem_max_before }} net.core.wmem_max={{ udp_wmem_max_before }} >/dev/null
+        sysctl -w net.core.rmem_max={{ udp_rmem_max_before }} net.core.wmem_max={{ udp_wmem_max_before }} >/dev/null
       args:
         executable: /bin/bash
       changed_when: true

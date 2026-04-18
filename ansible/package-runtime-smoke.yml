@@ -23,6 +23,7 @@
     cfwarp_image: "ghcr.io/sparticle9/cfwarp-cli:feat-masque"
     image_revision_expected: ""
     test_root: "/tmp/cfwarp-fulltest"
+    cfwarp_container_state_dir: "/tmp/cfwarp-state"
     cases:
       - name: legacy
         container_name: cfwarp-legacy-fulltest
@@ -118,7 +119,6 @@
         set -euo pipefail
 
         name={{ item.container_name | quote }}
-        state_dir={{ (test_root ~ '/' ~ item.name ~ '-state') | quote }}
         host_port={{ item.host_port | quote }}
         container_port={{ item.container_port | quote }}
         startup_attempts={{ item.startup_attempts | int }}
@@ -132,20 +132,15 @@
 
         trap cleanup EXIT
 
-        rm -rf "$state_dir"
-        mkdir -p "$state_dir"
-
         attempt=1
         while [ "$attempt" -le "$startup_attempts" ]; do
           echo "== CASE {{ item.name }} / attempt ${attempt} =="
           cleanup
-          rm -rf "$state_dir/run" "$state_dir/logs"
-          mkdir -p "$state_dir"
 
           cid=$(docker run -d \
             --name "$name" \
             -p "127.0.0.1:${host_port}:${container_port}" \
-            -v "$state_dir:/home/cfwarp/.local/state/cfwarp-cli" \
+            -e CFWARP_STATE_DIR={{ cfwarp_container_state_dir | quote }} \
             {% for key, value in item.env.items() %}-e {{ key }}={{ value | quote }} \
             {% endfor %}
             {{ cfwarp_image | quote }})
@@ -154,7 +149,7 @@
 
           if docker ps --format '{{ '{{.Names}}' }}' | grep -qx "$name"; then
             echo "-- status --"
-            docker exec "$name" cfwarp-cli status --json --state-dir /home/cfwarp/.local/state/cfwarp-cli || true
+            docker exec "$name" cfwarp-cli status --json --state-dir {{ cfwarp_container_state_dir | to_json }} || true
 
             probe=1
             while [ "$probe" -le "$probe_attempts" ]; do
@@ -183,10 +178,6 @@
 
           echo "-- logs --"
           docker logs "$name" || true
-          if [ -f "$state_dir/logs/backend.stderr.log" ]; then
-            echo "-- backend stderr --"
-            cat "$state_dir/logs/backend.stderr.log"
-          fi
           attempt=$((attempt + 1))
           if [ "$attempt" -le "$startup_attempts" ]; then
             sleep 3

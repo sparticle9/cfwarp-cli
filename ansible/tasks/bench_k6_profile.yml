@@ -15,7 +15,6 @@
     - name: "[{{ variant.name }}][{{ k6_profile.profile }}] Execute k6"
       ansible.builtin.shell: |
         timeout 120s docker run --rm \
-          --user 0:0 \
           --network container:cfwarp-bench-{{ variant.name }} \
           -v /tmp/k6_api.js:/scripts/k6_api.js:ro \
           -v /tmp/bench-{{ bench_ts }}:/results \

@@ -136,6 +136,12 @@ File:
 
 - `ansible/protocol-quick-bench.yml`
 
+Notes:
+
+- Containers are launched as the image runtime user (no `--user` override by default).
+- State directory writes are handled via `CFWARP_STATE_DIR` inside the container.
+- `udp_buffer_bytes` path and log-related sysctls are the only steps that require host `become`.
+
 Example:
 
 ```bash
@@ -154,6 +160,29 @@ ansible-playbook -i inventory.ini ansible/protocol-quick-bench.yml --limit warp 
   -e masque_initial_packet_size=1242
 ```
 
+Example with host sysctl privilege (`udp_buffer_bytes`):
+
+```bash
+ansible-playbook -i inventory.ini ansible/protocol-quick-bench.yml --limit warp \
+  -e udp_buffer_bytes=7500000 \
+  --become
+```
+
+### Package-runtime smoke
+
+Use for short functional smoke checks of packaged runtimes.
+
+File:
+
+- `ansible/package-runtime-smoke.yml`
+
+Notes:
+
+- Containers are launched as the image runtime user (no `--user` override by default).
+- `CFWARP_STATE_DIR` is set inside the container for runtime state.
+- `udp_buffer_bytes` path and related sysctls are the only steps that require host `become`.
+
+
 ### Real-target protocol comparison
 
 Use for remote `iperf3` + HTTP comparison across implementations.
@@ -161,6 +190,12 @@ Use for remote `iperf3` + HTTP comparison across implementations.
 File:
 
 - `ansible/protocol-real-bench.yml`
+
+Notes:
+
+- Containers are launched as the image runtime user (no `--user` override by default).
+- `CFWARP_STATE_DIR` is set inside the container for runtime state.
+- `udp_buffer_bytes` path and log-related sysctls are the only steps that require host `become`.
 
 Example:
 
