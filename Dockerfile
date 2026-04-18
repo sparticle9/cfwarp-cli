@@ -25,13 +25,18 @@ RUN CGO_ENABLED=0 go build \
 # ── Stage 2: Fetch sing-box for target arch ──────────────────────────────────
 FROM alpine:${ALPINE_VERSION} AS singbox
 ARG SINGBOX_VERSION=1.13.5
-# TARGETARCH is injected by BuildKit (amd64 / arm64)
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 
 RUN apk add --no-cache curl ca-certificates && \
     mkdir -p /out && \
+    singbox_arch="${TARGETARCH:-$(uname -m)}" && \
+    case "${singbox_arch}" in \
+      x86_64|amd64) singbox_arch=amd64 ;; \
+      aarch64|arm64) singbox_arch=arm64 ;; \
+      *) echo "unsupported architecture: ${singbox_arch}"; exit 1 ;; \
+    esac && \
     curl -fsSL \
-      "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${TARGETARCH}.tar.gz" \
+      "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${singbox_arch}.tar.gz" \
       | tar -xz --strip-components=1 -C /tmp && \
     install -m 0755 /tmp/sing-box /out/sing-box
 

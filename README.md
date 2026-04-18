@@ -61,13 +61,13 @@ docker stop cfwarp-quickstart
 | capability | Linux amd64 | Linux arm64 | macOS (Apple Silicon) |
 |---|---:|---:|---:|
 | config / validation / docs-driven workflows | yes | yes | yes |
-| local CLI control-plane (`register`, `import`, `render`, `up`, `down`) | yes | ⚠️ not yet fully validated on native hosts* | yes |
+| local CLI control-plane (`register`, `import`, `render`, `up`, `down`) | yes | ✅ validated on a Linux arm64 VPS (`orabr`) | yes |
 | local Docker (`docker run` / `docker-compose`) for legacy WireGuard lane | yes (`linux/amd64` images) | ✅ (published images; container tested) | yes |
 | local Docker for experimental MASQUE lane | yes | ✅ | no |
 | native remote dogfood / Ansible deployment path | yes (Linux only) | yes (Linux only) | no |
 | native MASQUE runtime (`runtime_family=native`, `transport=masque`) | experimental | experimental | no |
 
-*Native Linux arm64 host verification is still missing; please run and report in issues.
+*Linux arm64 host verification is now validated for local CLI + container workflows from `orabr`; continue to report any regressions with exact host + image tag.
 
 If you can validate on a real Linux arm64 VPS, add this to your checklist:
 
