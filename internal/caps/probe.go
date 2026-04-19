@@ -17,6 +17,9 @@ const (
 	ProbeWarp     = "warp"
 	ProbeGemini   = "gemini"
 	ProbeChatGPT  = "chatgpt"
+	ProbeNetflix  = "netflix"
+	ProbeYouTube  = "youtube"
+	ProbeClaude   = "claude"
 )
 
 type ProbeTarget struct {
@@ -48,7 +51,7 @@ func ProbeCheck(ctx context.Context, target ProbeTarget, check state.CapCheck) R
 		return probeInternet(ctx, target, timeout, checked)
 	case ProbeWarp:
 		return probeWarp(ctx, target, timeout, checked)
-	case ProbeGemini, ProbeChatGPT:
+	case ProbeGemini, ProbeChatGPT, ProbeNetflix, ProbeYouTube, ProbeClaude:
 		return probeUnlock(ctx, target, probe, timeout, checked)
 	default:
 		return Result{Probe: probe, OK: false, Detail: "unsupported probe", Checked: checked}

@@ -176,7 +176,7 @@ results is found or the attempt budget is exhausted.`,
 
 func init() {
 	rotateCmd.Flags().IntVar(&rotateAttempts, "attempts", 3, "maximum rotation attempts")
-	rotateCmd.Flags().StringSliceVar(&rotateServices, "service", nil, "unlock checks to use as the rotation driver (gemini, chatgpt/openai, claude)")
+	rotateCmd.Flags().StringSliceVar(&rotateServices, "service", nil, "unlock checks to use as the rotation driver (gemini, chatgpt/openai, claude, netflix, youtube)")
 	rotateCmd.Flags().DurationVar(&rotateTimeout, "timeout", 15*time.Second, "per-service HTTP timeout")
 	rotateCmd.Flags().DurationVar(&rotateSettleTime, "settle-time", 12*time.Second, "how long to wait for the local proxy to become reachable after each rotation")
 	rotateCmd.Flags().BoolVar(&rotateMasque, "masque", false, "also enroll MASQUE state while rotating the account")

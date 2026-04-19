@@ -53,12 +53,44 @@ func TestEvaluateClaude(t *testing.T) {
 	}
 }
 
+func TestEvaluateNetflix(t *testing.T) {
+	status, region, _ := evaluateNetflix(`{ "countryName":"US", "id":"USA" }`, `{ "countryName":"US" }`)
+	if status != StatusAvailable || region == "" {
+		t.Fatalf("expected netflix available with region, got %q %q", status, region)
+	}
+
+	status, _, detail := evaluateNetflix(`foo Oh no! bar`, `another Oh no! entry`)
+	if status != StatusWebOnly {
+		t.Fatalf("expected netflix originals only, got %q", status)
+	}
+	if detail == "" {
+		t.Fatalf("expected detail for netflix originals only")
+	}
+}
+
+func TestEvaluateYouTube(t *testing.T) {
+	status, region, _ := evaluateYouTubePremium(`{"INNERTUBE_CONTEXT_GL":"US"} ad-free`)
+	if status != StatusAvailable || region != "US" {
+		t.Fatalf("expected youtube available in US, got %q %q", status, region)
+	}
+
+	status, _, _ = evaluateYouTubePremium(`anywhere premium is not available in your country`)
+	if status != StatusUnavailable {
+		t.Fatalf("expected youtube unavailable, got %q", status)
+	}
+
+	status, region, _ = evaluateYouTubePremium(`visit www.google.cn for more`)
+	if status != StatusUnavailable || region != "CN" {
+		t.Fatalf("expected youtube CN unavailable, got %q %q", status, region)
+	}
+}
+
 func TestNormalizeServices(t *testing.T) {
-	got, err := NormalizeServices([]string{"gemini,openai", "claude", "chatgpt"})
+	got, err := NormalizeServices([]string{"gemini,openai", "claude", "chatgpt", "netflix", "youtube"})
 	if err != nil {
 		t.Fatalf("normalize services: %v", err)
 	}
-	if len(got) != 3 || got[0] != ServiceGemini || got[1] != ServiceChatGPT || got[2] != ServiceClaude {
+	if len(got) != 5 || got[0] != ServiceGemini || got[1] != ServiceChatGPT || got[2] != ServiceClaude || got[3] != ServiceNetflix || got[4] != ServiceYouTube {
 		t.Fatalf("unexpected normalized services: %#v", got)
 	}
 }

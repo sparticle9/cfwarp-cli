@@ -37,6 +37,9 @@ var validCapProbes = map[string]bool{
 	"warp":     true,
 	"gemini":   true,
 	"chatgpt":  true,
+	"claude":   true,
+	"netflix":  true,
+	"youtube":  true,
 }
 
 var validDNSModes = map[string]bool{

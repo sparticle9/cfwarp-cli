@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -13,14 +15,28 @@ import (
 )
 
 const (
-	ServiceGemini = "gemini"
+	ServiceGemini  = "gemini"
 	ServiceChatGPT = "chatgpt"
-	ServiceClaude = "claude"
+	ServiceClaude  = "claude"
+	ServiceNetflix = "netflix"
+	ServiceYouTube = "youtube"
 )
 
 const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
-var geminiRegionPattern = regexp.MustCompile(`,2,1,200,"([A-Z]{3})"`)
+var (
+	geminiRegionPattern         = regexp.MustCompile(`,2,1,200,"([A-Z]{3})"`)
+	netflixCountryNamePattern   = regexp.MustCompile(`"countryName"\s*:\s*"([^"]+)"`)
+	netflixCountryCodePattern   = regexp.MustCompile(`"id"\s*:\s*"([^"]+)"`)
+	netflixRegionCodePattern    = regexp.MustCompile(`"countryCode"\s*:\s*"([^"]+)"`)
+	youtubeContextRegionPattern = regexp.MustCompile(`"INNERTUBE_CONTEXT_GL"\s*:\s*"([A-Z]{2})"`)
+	cdnDomainPattern            = regexp.MustCompile(`"url"\s*:\s*"([^\"]+)"`)
+	netflixISPPattern           = regexp.MustCompile(`"isp"\s*:\s*"([^"]+)"`)
+	netflixCountryPattern       = regexp.MustCompile(`"country"\s*:\s*"([^"]+)"`)
+)
+
+// Optional supplement metadata returned by service probes.
+type Supplement map[string]string
 
 type Status string
 
@@ -42,11 +58,12 @@ type Config struct {
 }
 
 type Result struct {
-	Service string `json:"service"`
-	Status  Status `json:"status"`
-	OK      bool   `json:"ok"`
-	Region  string `json:"region,omitempty"`
-	Detail  string `json:"detail,omitempty"`
+	Service    string     `json:"service"`
+	Status     Status     `json:"status"`
+	OK         bool       `json:"ok"`
+	Region     string     `json:"region,omitempty"`
+	Detail     string     `json:"detail,omitempty"`
+	Supplement Supplement `json:"supplement,omitempty"`
 }
 
 func NormalizeServices(raw []string) ([]string, error) {
@@ -99,6 +116,10 @@ func probeWithClient(ctx context.Context, client *http.Client, service string) R
 		return probeChatGPT(ctx, client)
 	case ServiceClaude:
 		return probeClaude(ctx, client)
+	case ServiceNetflix:
+		return probeNetflix(ctx, client)
+	case ServiceYouTube:
+		return probeYouTube(ctx, client)
 	default:
 		return Result{Service: service, Status: StatusUnknown, Detail: "unsupported service"}
 	}
@@ -149,24 +170,128 @@ func probeClaude(ctx context.Context, client *http.Client) Result {
 	return Result{Service: ServiceClaude, Status: status, OK: status == StatusAvailable, Detail: detail}
 }
 
+func probeNetflix(ctx context.Context, client *http.Client) Result {
+	mutate := func(r *http.Request) {
+		r.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		r.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		r.Header.Set("User-Agent", browserUA)
+	}
+	titleA, _, err := fetchBody(ctx, client, http.MethodGet, "https://www.netflix.com/title/81280792", mutate)
+	if err != nil {
+		return Result{Service: ServiceNetflix, Status: StatusNetworkError, Detail: err.Error()}
+	}
+	titleB, _, err := fetchBody(ctx, client, http.MethodGet, "https://www.netflix.com/title/70143836", mutate)
+	if err != nil {
+		return Result{Service: ServiceNetflix, Status: StatusNetworkError, Detail: err.Error()}
+	}
+	status, region, detail := evaluateNetflix(titleA, titleB)
+	result := Result{Service: ServiceNetflix, Status: status, OK: status == StatusAvailable, Region: region, Detail: detail}
+
+	supplement := make(map[string]string)
+	cdnInfo := probeNetflixCDN(ctx, client)
+	if cdnInfo != "" {
+		supplement["netflix-cdn"] = cdnInfo
+		result.Supplement = supplement
+	}
+	return result
+}
+
+func probeYouTube(ctx context.Context, client *http.Client) Result {
+	body, _, err := fetchBody(ctx, client, http.MethodGet, "https://www.youtube.com/premium", func(r *http.Request) {
+		r.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		r.Header.Set("User-Agent", browserUA)
+		r.Header.Set("Cookie", "VISITOR_INFO1_LIVE=Di84mAIbgKY; YSC=FSCWhKo2Zgw; __Secure-YEC=CgtRWTBGTFExeV9Iayjele2yBjIKCgJERRIEEgAgYQ%3D%3D")
+	})
+	if err != nil {
+		return Result{Service: ServiceYouTube, Status: StatusNetworkError, Detail: err.Error()}
+	}
+	status, region, detail := evaluateYouTubePremium(body)
+	return Result{Service: ServiceYouTube, Status: status, OK: status == StatusAvailable, Region: region, Detail: detail}
+}
+
+func probeNetflixCDN(ctx context.Context, client *http.Client) string {
+	body, _, statusCode, err := fetchBodyWithStatus(ctx, client, http.MethodGet, "https://api.fast.com/netflix/speedtest/v2?https=true&token=YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm&urlCount=1", func(r *http.Request) {
+		r.Header.Set("User-Agent", browserUA)
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Sprintf("%v", ctx.Err())
+		}
+		return "network error"
+	}
+	if statusCode == http.StatusForbidden {
+		return "blocked by netflix"
+	}
+	if statusCode < 200 || statusCode >= 400 {
+		return fmt.Sprintf("http_%d", statusCode)
+	}
+	cdnURL := extractFirst(cdnDomainPattern, body)
+	if cdnURL == "" {
+		return "page error"
+	}
+	u, err := url.Parse(cdnURL)
+	if err != nil || u.Host == "" {
+		return "page error"
+	}
+	ips, err := net.LookupIP(u.Hostname())
+	if err != nil || len(ips) == 0 {
+		return "cdn ip not found"
+	}
+	cdnIP := ""
+	for _, ip := range ips {
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() {
+			continue
+		}
+		cdnIP = ip.String()
+		break
+	}
+	if cdnIP == "" {
+		return "cdn ip hidden"
+	}
+	geoBody, _, err := fetchBody(ctx, client, http.MethodGet, "https://api.ip.sb/geoip/"+cdnIP, func(r *http.Request) {
+		r.Header.Set("User-Agent", browserUA)
+	})
+	if err != nil {
+		return fmt.Sprintf("ip=%s lookup failed", cdnIP)
+	}
+
+	country := extractFirst(netflixCountryPattern, geoBody)
+	isp := extractFirst(netflixISPPattern, geoBody)
+	if isp == "" {
+		return "no isp info"
+	}
+	if country == "" {
+		country = cdnIP
+	}
+	if isp == "Netflix Streaming Services" {
+		return country
+	}
+	return fmt.Sprintf("%s (%s)", country, isp)
+}
+
 func fetchBody(ctx context.Context, client *http.Client, method, target string, mutate func(*http.Request)) (string, string, error) {
+	body, finalURL, _, err := fetchBodyWithStatus(ctx, client, method, target, mutate)
+	return body, finalURL, err
+}
+
+func fetchBodyWithStatus(ctx context.Context, client *http.Client, method, target string, mutate func(*http.Request)) (string, string, int, error) {
 	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	if mutate != nil {
 		mutate(req)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", "", 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
-		return "", resp.Request.URL.String(), err
+		return "", resp.Request.URL.String(), resp.StatusCode, err
 	}
-	return string(body), resp.Request.URL.String(), nil
+	return string(body), resp.Request.URL.String(), resp.StatusCode, nil
 }
 
 func evaluateGemini(body string) (Status, string, string) {
@@ -217,6 +342,74 @@ func evaluateClaude(finalURL string) (Status, string) {
 	}
 }
 
+func evaluateNetflix(titleA, titleB string) (Status, string, string) {
+	titleAUnavailable := strings.Contains(titleA, "Oh no!")
+	titleBUnavailable := strings.Contains(titleB, "Oh no!")
+
+	if titleAUnavailable && titleBUnavailable {
+		return StatusWebOnly, "", "netflix originals only"
+	}
+	if !titleAUnavailable || !titleBUnavailable {
+		region := extractNetflixRegion(titleA)
+		if region == "" {
+			region = extractNetflixRegion(titleB)
+		}
+		if region == "" {
+			region = "UNKNOWN"
+		}
+		return StatusAvailable, region, "netflix available"
+	}
+	return StatusUnavailable, "", "netflix unavailable"
+}
+
+func evaluateYouTubePremium(body string) (Status, string, string) {
+	if strings.Contains(body, "www.google.cn") {
+		return StatusUnavailable, "CN", "youtube premium unavailable in CN"
+	}
+	if strings.Contains(strings.ToLower(body), "premium is not available in your country") {
+		return StatusUnavailable, "", "youtube premium unavailable"
+	}
+	if strings.Contains(body, "ad-free") {
+		region := extractYouTubePremiumRegion(body)
+		if region == "" {
+			region = "UNKNOWN"
+		}
+		return StatusAvailable, region, "youtube premium available"
+	}
+	return StatusUnknown, "", "youtube page parsing failed"
+}
+
+func extractNetflixRegion(body string) string {
+	if m := netflixCountryNamePattern.FindStringSubmatch(body); len(m) == 2 {
+		return strings.TrimSpace(m[1])
+	}
+	if m := netflixRegionCodePattern.FindStringSubmatch(body); len(m) == 2 {
+		return strings.TrimSpace(m[1])
+	}
+	if m := netflixCountryCodePattern.FindStringSubmatch(body); len(m) == 2 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
+func extractYouTubePremiumRegion(body string) string {
+	if m := youtubeContextRegionPattern.FindStringSubmatch(body); len(m) == 2 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
+func extractFirst(re *regexp.Regexp, text string) string {
+	if re == nil {
+		return ""
+	}
+	m := re.FindStringSubmatch(text)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
+}
+
 func normalizeService(name string) string {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "", "none":
@@ -227,6 +420,10 @@ func normalizeService(name string) string {
 		return ServiceGemini
 	case "claude", "anthropic":
 		return ServiceClaude
+	case "youtube", "youtube-premium", "yt":
+		return ServiceYouTube
+	case "netflix":
+		return ServiceNetflix
 	default:
 		return strings.ToLower(strings.TrimSpace(name))
 	}
@@ -234,7 +431,7 @@ func normalizeService(name string) string {
 
 func isSupported(name string) bool {
 	switch name {
-	case ServiceGemini, ServiceChatGPT, ServiceClaude:
+	case ServiceGemini, ServiceChatGPT, ServiceClaude, ServiceNetflix, ServiceYouTube:
 		return true
 	default:
 		return false

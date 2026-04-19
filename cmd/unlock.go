@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ var unlockTimeout time.Duration
 
 var unlockTestCmd = &cobra.Command{
 	Use:   "test",
-	Short: "Test Gemini / ChatGPT availability through the configured proxy",
+	Short: "Test unlock targets through the configured proxy (gemini, chatgpt, claude, netflix, youtube)",
 	RunE: func(c *cobra.Command, args []string) error {
 		dirs := state.Resolve(globalStateDir, "")
 		sett, err := resolveSettings(c, dirs)
@@ -61,6 +62,18 @@ var unlockTestCmd = &cobra.Command{
 			if result.Detail != "" {
 				line += fmt.Sprintf(" — %s", result.Detail)
 			}
+			if len(result.Supplement) > 0 {
+				keys := make([]string, 0, len(result.Supplement))
+				for key := range result.Supplement {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				bits := make([]string, 0, len(keys))
+				for _, key := range keys {
+					bits = append(bits, fmt.Sprintf("%s=%s", key, result.Supplement[key]))
+				}
+				line += fmt.Sprintf(" — %s", strings.Join(bits, "; "))
+			}
 			fmt.Fprintln(c.OutOrStdout(), line)
 		}
 		return requireUnlockResults(results)
@@ -96,7 +109,7 @@ func probeUnlockResults(ctx context.Context, sett state.Settings, services []str
 }
 
 func init() {
-	unlockTestCmd.Flags().StringSliceVar(&unlockServices, "service", nil, "unlock checks to run (gemini, chatgpt/openai)")
+	unlockTestCmd.Flags().StringSliceVar(&unlockServices, "service", nil, "unlock checks to run (gemini, chatgpt/openai, claude, netflix, youtube)")
 	unlockTestCmd.Flags().BoolVar(&unlockJSON, "json", false, "emit unlock results as JSON")
 	unlockTestCmd.Flags().DurationVar(&unlockTimeout, "timeout", 15*time.Second, "per-service HTTP timeout")
 	unlockCmd.AddCommand(unlockTestCmd)
