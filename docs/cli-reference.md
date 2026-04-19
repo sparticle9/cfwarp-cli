@@ -122,10 +122,10 @@ cfwarp-cli up --state-dir /path/to/state
 cfwarp-cli status --state-dir /path/to/state --require-running
 
 # Verify
-cfwarp-cli unlock test --service gemini --state-dir /path/to/state
+cfwarp-cli unlock test --service gemini --service netflix --service youtube --state-dir /path/to/state
 
 # Rotate on failure
-cfwarp-cli rotate --attempts 3 --service gemini --state-dir /path/to/state
+cfwarp-cli rotate --attempts 3 --service gemini --service netflix --state-dir /path/to/state
 
 # Stop
 cfwarp-cli down --state-dir /path/to/state

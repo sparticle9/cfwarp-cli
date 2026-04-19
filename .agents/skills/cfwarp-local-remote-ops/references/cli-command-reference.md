@@ -62,8 +62,8 @@ cfwarp-cli completion bash --init-file ~/.bashrc.local
 ### Common maintenance
 
 ```bash
-cfwarp-cli unlock test --service gemini --state-dir "$CFWARP_STATE_DIR"
-cfwarp-cli rotate --attempts 3 --service gemini --state-dir "$CFWARP_STATE_DIR"
+cfwarp-cli unlock test --service gemini --service netflix --service youtube --state-dir "$CFWARP_STATE_DIR"
+cfwarp-cli rotate --attempts 3 --service gemini --service netflix --state-dir "$CFWARP_STATE_DIR"
 cfwarp-cli down --state-dir "$CFWARP_STATE_DIR"
 ```
 

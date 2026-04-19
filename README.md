@@ -426,8 +426,8 @@ cfwarp-cli down --state-dir /path/to/state
 ### Rotation and unlock checks
 
 ```bash
-cfwarp-cli unlock test --service gemini --service chatgpt --state-dir /path/to/state
-cfwarp-cli rotate --attempts 5 --service gemini --state-dir /path/to/state
+cfwarp-cli unlock test --service gemini --service chatgpt --service netflix --service youtube --state-dir /path/to/state
+cfwarp-cli rotate --attempts 5 --service gemini --service netflix --state-dir /path/to/state
 cfwarp-cli address show --json --state-dir /path/to/state
 ```
 

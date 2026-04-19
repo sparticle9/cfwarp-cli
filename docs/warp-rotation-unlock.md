@@ -64,6 +64,8 @@ This validates the resolved config after applying defaults, persisted settings, 
 
 ```bash
 cfwarp-cli unlock test --service gemini --service chatgpt
+cfwarp-cli unlock test --service netflix
+cfwarp-cli unlock test --service youtube
 cfwarp-cli unlock test --json
 ```
 
@@ -71,11 +73,23 @@ Current manual unlock checks:
 
 - `gemini`
 - `chatgpt` (alias: `openai`)
+- `claude` (alias: `anthropic`)
+- `netflix` (with supplemental `netflix-cdn` info)
+- `youtube`
+
+`netflix` output includes an extra `netflix-cdn` supplement if it can be resolved.
+
+```bash
+# Example
+cfwarp-cli unlock test --service netflix --service youtube --state-dir /path/to/state
+netflix: available (US) — netflix available — netflix-cdn=US (Cloudfront)
+youtube: unavailable (CN) — youtube premium unavailable in CN
+```
 
 ### Manual rotation
 
 ```bash
-cfwarp-cli rotate --attempts 8 --service gemini --service chatgpt
+cfwarp-cli rotate --attempts 8 --service gemini --service chatgpt --service netflix
 ```
 
 This is still available as an explicit operator tool.
@@ -206,10 +220,11 @@ Current built-in probe names:
 - `warp`
 - `gemini`
 - `chatgpt`
+- `claude`
+- `netflix`
+- `youtube`
 
 These are **code-defined** probes, not arbitrary shell commands.
-
-That keeps the system predictable and efficient while leaving room for later built-ins such as YouTube-specific capability checks.
 
 ## Required vs optional caps
 
